@@ -162,27 +162,20 @@ Once deployed, add the prod `oauth-callback` URL (`https://<worker>.workers.dev/
 
 Users add the server to Claude as a **Custom Connector** pointing at `https://<worker>.workers.dev/mcp` — Claude performs Dynamic Client Registration, OAuth discovery, and the Google sign-in dance automatically. No config files, no shared secrets handed out to teammates.
 
-### CI/CD (GitHub Actions)
+### CI/CD (Workers Builds)
 
-`.github/workflows/deploy.yml` runs on every push and PR:
+Continuous deployment is handled by [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/), Cloudflare's native Git integration — configured in the Worker dashboard under **Settings → Build**, connected to this repo.
 
-- **typecheck** job — `npm ci` + `npm run typecheck` on every push and PR.
-- **deploy** job — runs only on pushes to `main`, after typecheck passes. Uses [`cloudflare/wrangler-action@v3`](https://github.com/cloudflare/wrangler-action) to run `wrangler deploy`.
+- **Trigger:** every push to `main`.
+- **Build command:** `npm ci && npm run typecheck` — a type error fails the build and blocks deploy.
+- **Deploy command:** `npx wrangler deploy`.
+- **Preview deployments:** PRs get their own preview URLs automatically; status checks post back to GitHub.
 
-#### Required GitHub repo secrets
+No `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets needed in GitHub — Cloudflare owns the deploy credentials internally.
 
-Settings → Secrets and variables → Actions:
+#### App secrets stay out of CI
 
-| Secret | Where to get it |
-| --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → right sidebar on the Workers & Pages overview. |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare dashboard → My Profile → API Tokens → **Create Token → "Edit Cloudflare Workers"** template (covers Workers Scripts:Edit, Workers KV Storage:Edit, Account Settings:Read, User Details:Read). Scope it to a single account. |
-
-The workflow uses a GitHub **environment** named `production` — optional to create, but if you want manual approval on prod deploys, add the environment in Settings → Environments with "Required reviewers" turned on.
-
-#### App secrets stay out of GitHub Actions
-
-`CGTRADER_CLIENT_ID`, `CGTRADER_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` are **deliberately not** in GitHub Actions. They're set one-time via `wrangler secret put` (step 2 above) and live only in the Workers runtime environment. CI deploys code, not credentials — so a compromised GHA token can redeploy but can't exfiltrate app secrets.
+`CGTRADER_CLIENT_ID`, `CGTRADER_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` are **deliberately not** injected by Workers Builds. They're set one-time via `npx wrangler secret put ...` (step 2 above) and live only in the Workers runtime environment. CI deploys code, not credentials.
 
 ## Endpoints
 

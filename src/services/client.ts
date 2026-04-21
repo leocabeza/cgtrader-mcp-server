@@ -2,6 +2,8 @@ import { API_BASE_URL, REQUEST_TIMEOUT_MS } from "../constants.js";
 import type { Env } from "../env.js";
 import { getAccessToken, invalidateToken } from "./token.js";
 
+const RESPONSE_CACHE_TTL_S = 60;
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -13,13 +15,20 @@ export class ApiError extends Error {
   }
 }
 
-function buildUrl(path: string, params?: Record<string, unknown>): URL {
+function buildUrl(
+  path: string,
+  params?: Record<string, unknown>,
+  sortParams = false,
+): URL {
   const base = API_BASE_URL.replace(/\/+$/, "");
   const p = path.startsWith("/") ? path : `/${path}`;
   const url = new URL(`${base}${p}`);
   if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v === undefined || v === null) continue;
+    const entries = Object.entries(params).filter(
+      ([, v]) => v !== undefined && v !== null,
+    );
+    if (sortParams) entries.sort(([a], [b]) => a.localeCompare(b));
+    for (const [k, v] of entries) {
       url.searchParams.set(k, String(v));
     }
   }
@@ -81,8 +90,23 @@ export async function apiGet<T>(
   path: string,
   params?: Record<string, unknown>,
 ): Promise<T> {
+  const cacheKey = buildUrl(path, params, true).toString();
+  const hit = await caches.default.match(cacheKey);
+  if (hit) {
+    return (await hit.json()) as T;
+  }
   const res = await ensureOk(await request(env, path, params), path);
-  return (await res.json()) as T;
+  const text = await res.text();
+  await caches.default.put(
+    cacheKey,
+    new Response(text, {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": `max-age=${RESPONSE_CACHE_TTL_S}`,
+      },
+    }),
+  );
+  return JSON.parse(text) as T;
 }
 
 export async function apiGetRaw(

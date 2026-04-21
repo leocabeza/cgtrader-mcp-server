@@ -24,8 +24,8 @@ The free-only guarantee is enforced two ways:
 - `src/worker.ts` — Workers entrypoint. Exports an `OAuthProvider` that gates `/mcp` behind OAuth 2.1 and delegates everything else (`/authorize`, `/oauth-callback`, `/healthz`) to the default handler. Also implements `/token`, `/register`, and `/.well-known/oauth-authorization-server`.
 - `src/auth/google-handler.ts` — The default handler. `/authorize` redirects to Google with the `AuthRequest` encoded in `state`. `/oauth-callback` exchanges the Google code, decodes the `id_token`, enforces the `@cgtrader.com` domain, and calls `completeAuthorization` so the provider can issue an MCP access token. Also serves `/healthz`.
 - `src/mcp-agent.ts` — `CgTraderMCP extends McpAgent<Env, unknown, AuthProps>`. Lives in a SQLite-backed Durable Object (binding `MCP_OBJECT`). Registers tools in `init()` and warms the CGTrader OAuth token before any request is served. The authenticated user's props (`email`, `sub`, `name`) are available as `this.props`.
-- `src/services/token.ts` — CGTrader-side OAuth `client_credentials` (server → CGTrader, separate from the Google-side user auth). In-memory cache with refresh leeway; invalidated on 401.
-- `src/services/client.ts` — Thin `fetch` wrapper that attaches `Authorization: Bearer <cgtrader-token>` and retries once on 401.
+- `src/services/token.ts` — CGTrader-side OAuth `client_credentials` (server → CGTrader, separate from the Google-side user auth). Two-tier cache: L1 is module-scope (per-isolate, sync); L2 is the Cloudflare Cache API (`caches.default`, colo-local, shared across isolates) with `Cache-Control: max-age = expires_in - 60s`. On a 401, `invalidateToken()` wipes L1 synchronously and fire-and-forget deletes L2; the retry path forces a fresh token exchange by bypassing both caches.
+- `src/services/client.ts` — Thin `fetch` wrapper that attaches `Authorization: Bearer <cgtrader-token>` and retries once on 401 with `forceRefresh=true`. `apiGet` responses are cached in `caches.default` for 60s keyed on `(path + sorted query params)`, so repeated searches across users don't each hit CGTrader's API and consume the shared `client_credentials` rate bucket. `apiGetRaw` is intentionally **not** cached — it's only used for the signed-S3-URL redirect resolution, and those URLs expire.
 - `src/tools/*.ts` — Tool definitions. Receive `env` via `registerModelTools(server, env)` / `registerCategoryTools(server, env)`.
 
 ## Requirements
@@ -54,10 +54,11 @@ This is what Claude's Custom Connector will use (indirectly) to sign users in wi
 - Google Cloud Console → <https://console.cloud.google.com/apis/credentials>
 - **Create Credentials → OAuth client ID**
 - **Application type:** Web application
-- **Authorized redirect URIs:**
+- **Authorized redirect URIs** (add **both** localhost variants — Google does exact-string matching, and MCP clients vary on which host they use):
   - `http://127.0.0.1:8787/oauth-callback` (local dev)
+  - `http://localhost:8787/oauth-callback` (local dev)
   - `https://<your-worker-subdomain>.workers.dev/oauth-callback` (prod — add once deployed)
-- Under the consent screen settings, set **User type: Internal** so only your Workspace can sign in.
+- Consent screen → **User type: Internal** (Workspace-owned project only — restricts sign-in to your Workspace), **or External + Testing** with each user added under **Test users** if the Cloud project is under a personal Google account.
 
 Copy the resulting **Client ID** and **Client secret**.
 

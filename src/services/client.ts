@@ -45,8 +45,8 @@ async function request(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  const doFetch = async (): Promise<Response> => {
-    const token = await getAccessToken(env);
+  const doFetch = async (forceRefresh: boolean): Promise<Response> => {
+    const token = await getAccessToken(env, forceRefresh);
     return fetch(url, {
       method: "GET",
       headers: {
@@ -59,10 +59,10 @@ async function request(
   };
 
   try {
-    let res = await doFetch();
+    let res = await doFetch(false);
     if (res.status === 401) {
       invalidateToken();
-      res = await doFetch();
+      res = await doFetch(true);
     }
     return res;
   } finally {

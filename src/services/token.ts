@@ -18,8 +18,47 @@ interface CachedToken {
   refreshAt: number;
 }
 
+const EDGE_CACHE_KEY = "https://cgtrader-mcp.internal/oauth-token";
+const EDGE_CACHE_FALLBACK_TTL_S = 300;
+
 let cached: CachedToken | null = null;
 let inFlight: Promise<CachedToken> | null = null;
+
+function stillValid(token: CachedToken): boolean {
+  return token.refreshAt === 0 || token.refreshAt > Date.now();
+}
+
+async function readEdgeCache(): Promise<CachedToken | null> {
+  const hit = await caches.default.match(EDGE_CACHE_KEY);
+  if (!hit) return null;
+  try {
+    const data = (await hit.json()) as CachedToken;
+    if (typeof data.accessToken !== "string") return null;
+    if (!stillValid(data)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function writeEdgeCache(
+  token: CachedToken,
+  expiresInSec: number,
+): Promise<void> {
+  const maxAge =
+    expiresInSec > 0
+      ? Math.max(1, expiresInSec - TOKEN_REFRESH_LEEWAY_S)
+      : EDGE_CACHE_FALLBACK_TTL_S;
+  await caches.default.put(
+    EDGE_CACHE_KEY,
+    new Response(JSON.stringify(token), {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": `max-age=${maxAge}`,
+      },
+    }),
+  );
+}
 
 async function fetchToken(env: Env): Promise<CachedToken> {
   const clientId = env.CGTRADER_CLIENT_ID;
@@ -72,19 +111,22 @@ async function fetchToken(env: Env): Promise<CachedToken> {
   const expiresIn = typeof data.expires_in === "number" ? data.expires_in : 0;
   const refreshAt =
     expiresIn > 0 ? Date.now() + (expiresIn - TOKEN_REFRESH_LEEWAY_S) * 1000 : 0;
-  return { accessToken: data.access_token, refreshAt };
+  const token: CachedToken = { accessToken: data.access_token, refreshAt };
+  await writeEdgeCache(token, expiresIn);
+  return token;
 }
 
 export async function getAccessToken(
   env: Env,
   forceRefresh = false,
 ): Promise<string> {
-  if (
-    !forceRefresh &&
-    cached &&
-    (cached.refreshAt === 0 || cached.refreshAt > Date.now())
-  ) {
-    return cached.accessToken;
+  if (!forceRefresh) {
+    if (cached && stillValid(cached)) return cached.accessToken;
+    const edge = await readEdgeCache();
+    if (edge) {
+      cached = edge;
+      return edge.accessToken;
+    }
   }
   if (!inFlight) {
     inFlight = fetchToken(env).finally(() => {
@@ -102,6 +144,7 @@ export async function getAccessToken(
 
 export function invalidateToken(): void {
   cached = null;
+  caches.default.delete(EDGE_CACHE_KEY).catch(() => {});
 }
 
 export async function warmUpToken(env: Env): Promise<void> {

@@ -30,8 +30,8 @@ The free-only guarantee is enforced two ways:
 
 ## Requirements
 
-- **Node.js ≥ 20** (enforced via `package.json#engines`) and npm.
-- **Cloudflare account** (free Workers plan is enough) — sign up at <https://dash.cloudflare.com/sign-up>. Wrangler will prompt for browser login on first use; no global binary install needed (it's a devDependency and runs via `npx`/`npm run`).
+- **Node.js ≥ 20** (enforced via `package.json#engines`) and **pnpm** (pinned via `package.json#packageManager`; run `corepack enable` once and it'll auto-provision the right version).
+- **Cloudflare account** (free Workers plan is enough) — sign up at <https://dash.cloudflare.com/sign-up>. Wrangler will prompt for browser login on first use; no global binary install needed (it's a devDependency and runs via `pnpm exec`/`pnpm run`).
 - **Google Cloud project** — for creating the OAuth 2.0 client in step 2 of Setup.
 - **CGTrader account** — to register the OAuth application in step 1 of Setup.
 
@@ -65,7 +65,7 @@ Copy the resulting **Client ID** and **Client secret**.
 ### 3. Install
 
 ```bash
-npm install
+pnpm install
 ```
 
 ### 4. Create `.dev.vars` (local secrets for `wrangler dev`)
@@ -93,7 +93,7 @@ Then fill in the four credentials from steps 1 and 2. `.dev.vars` is the Wrangle
 ### Run locally
 
 ```bash
-npm run dev
+pnpm dev
 # ⎔ Starting local server...
 # [wrangler:info] Ready on http://localhost:8787
 ```
@@ -107,19 +107,19 @@ This starts `wrangler dev`, which runs the Worker in a local Miniflare sandbox (
 ### Typecheck
 
 ```bash
-npm run typecheck
+pnpm typecheck
 ```
 
 ## Testing with MCP Inspector
 
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is Anthropic's official web UI for debugging MCP servers. It supports OAuth 2.1 discovery, so it will drive the full Google sign-in flow end-to-end and then let you exercise tools.
 
-1. Start the server: `npm run dev`
-2. In another terminal: `npx @modelcontextprotocol/inspector`. Opens `http://127.0.0.1:6274`.
+1. Start the server: `pnpm dev`
+2. In another terminal: `pnpm dlx @modelcontextprotocol/inspector`. Opens `http://127.0.0.1:6274`.
 3. In the inspector UI:
    - **Transport:** `Streamable HTTP`
    - **URL:** `http://localhost:8787/mcp`
-   - Paste the **Proxy Session Token** printed in the `npx` terminal.
+   - Paste the **Proxy Session Token** printed in the inspector's terminal.
    - Click **Connect**. You'll be redirected to Google, pick your `@cgtrader.com` account, consented back to the inspector, then arrive at the Tools tab.
 4. **Tools → List Tools** shows the eight `cgtrader_*` tools. Pick one, fill in arguments, **Run Tool**. The **History** tab shows raw JSON-RPC frames for debugging.
 
@@ -136,26 +136,26 @@ curl -sS -i http://localhost:8787/mcp   # expect 401 invalid_token
 ### 1. Create the OAuth KV namespace (once)
 
 ```bash
-npx wrangler kv namespace create OAUTH_KV
+pnpm exec wrangler kv namespace create OAUTH_KV
 ```
 
 Copy the returned `id` into `wrangler.jsonc` under `kv_namespaces[0].id` (replaces the placeholder).
 
-First time you run `npx wrangler` it'll open a browser to log in to Cloudflare; stays logged in after.
+First time you run `pnpm exec wrangler` it'll open a browser to log in to Cloudflare; stays logged in after.
 
 ### 2. Set production secrets (once, or when rotating)
 
 ```bash
-npx wrangler secret put CGTRADER_CLIENT_ID
-npx wrangler secret put CGTRADER_CLIENT_SECRET
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
+pnpm exec wrangler secret put CGTRADER_CLIENT_ID
+pnpm exec wrangler secret put CGTRADER_CLIENT_SECRET
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
 ### 3. Deploy
 
 ```bash
-npm run deploy   # wrangler deploy
+pnpm run deploy   # wrangler deploy
 ```
 
 Once deployed, add the prod `oauth-callback` URL (`https://<worker>.workers.dev/oauth-callback`) to the Google OAuth client's **Authorized redirect URIs** in the Google Cloud Console.
@@ -167,15 +167,16 @@ Users add the server to Claude as a **Custom Connector** pointing at `https://<w
 Continuous deployment is handled by [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/), Cloudflare's native Git integration — configured in the Worker dashboard under **Settings → Build**, connected to this repo.
 
 - **Trigger:** every push to `main`.
-- **Build command:** `npm ci && npm run typecheck` — a type error fails the build and blocks deploy.
-- **Deploy command:** `npx wrangler deploy`.
+- **Package manager:** pnpm is pinned via `package.json#packageManager`; Workers Builds' corepack auto-provisions it when the lockfile is `pnpm-lock.yaml`.
+- **Build command:** `pnpm install --frozen-lockfile && pnpm typecheck` — a type error fails the build and blocks deploy.
+- **Deploy command:** `pnpm exec wrangler deploy`.
 - **Preview deployments:** PRs get their own preview URLs automatically; status checks post back to GitHub.
 
 No `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets needed in GitHub — Cloudflare owns the deploy credentials internally.
 
 #### App secrets stay out of CI
 
-`CGTRADER_CLIENT_ID`, `CGTRADER_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` are **deliberately not** injected by Workers Builds. They're set one-time via `npx wrangler secret put ...` (step 2 above) and live only in the Workers runtime environment. CI deploys code, not credentials.
+`CGTRADER_CLIENT_ID`, `CGTRADER_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` are **deliberately not** injected by Workers Builds. They're set one-time via `pnpm exec wrangler secret put ...` (step 2 above) and live only in the Workers runtime environment. CI deploys code, not credentials.
 
 ## Endpoints
 

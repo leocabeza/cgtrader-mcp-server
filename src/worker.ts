@@ -1,30 +1,15 @@
-import { SERVER_NAME, SERVER_VERSION } from "./constants.js";
-import type { Env } from "./env.js";
+import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
+import { GoogleHandler } from "./auth/google-handler.js";
 import { CgTraderMCP } from "./mcp-agent.js";
 
 export { CgTraderMCP };
 
-export default {
-  async fetch(
-    request: Request,
-    env: Env,
-    ctx: ExecutionContext,
-  ): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname === "/healthz") {
-      return Response.json({
-        status: "ok",
-        server: SERVER_NAME,
-        version: SERVER_VERSION,
-      });
-    }
-    if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
-      return CgTraderMCP.serve("/mcp", { binding: "MCP_OBJECT" }).fetch(
-        request,
-        env,
-        ctx,
-      );
-    }
-    return new Response("Not found", { status: 404 });
-  },
-};
+export default new OAuthProvider({
+  apiRoute: "/mcp",
+  apiHandler: CgTraderMCP.serve("/mcp") as never,
+  defaultHandler: GoogleHandler as never,
+  authorizeEndpoint: "/authorize",
+  tokenEndpoint: "/token",
+  clientRegistrationEndpoint: "/register",
+  scopesSupported: ["openid", "email", "profile"],
+});

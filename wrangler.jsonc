@@ -12,5 +12,11 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["CgTraderMCP"] }
   ],
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "placeholder-run-wrangler-kv-namespace-create-OAUTH_KV" }
+  ],
+  "vars": {
+    "ALLOWED_EMAIL_DOMAIN": "cgtrader.com"
+  },
   "observability": { "enabled": true }
 }

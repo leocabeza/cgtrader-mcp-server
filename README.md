@@ -1,6 +1,6 @@
 # cgtrader-mcp-server
 
-MCP server exposing the [CGTrader](https://api.cgtrader.com) marketplace — **free models only**. Runs on **Cloudflare Workers** and speaks MCP over **Streamable HTTP**.
+MCP server exposing the [CGTrader](https://api.cgtrader.com) marketplace — **free models only**. Runs on **Cloudflare Workers**, speaks MCP over **Streamable HTTP**, and gates `/mcp` behind **OAuth 2.1** federated to **Google Workspace SSO** (`@cgtrader.com` accounts only by default).
 
 ## Tools
 
@@ -21,11 +21,19 @@ The free-only guarantee is enforced two ways:
 
 ## Architecture
 
-- `src/worker.ts` — Workers entrypoint. Routes `/healthz` and `/mcp`.
-- `src/mcp-agent.ts` — `CgTraderMCP extends McpAgent<Env>`. Lives in a SQLite-backed Durable Object (binding `MCP_OBJECT`). Registers tools in `init()` and warms the OAuth token before any request is served.
-- `src/services/token.ts` — OAuth `client_credentials` against CGTrader. In-memory cache with refresh leeway; invalidated on 401.
-- `src/services/client.ts` — Thin `fetch` wrapper that attaches `Authorization: Bearer <token>` and retries once on 401.
-- `src/tools/*.ts` — Tool definitions. Receive `env` via `registerModelTools(server, env)` / `registerCategoryTools(server, env)` so tool closures can reach the OAuth credentials without module-level state.
+- `src/worker.ts` — Workers entrypoint. Exports an `OAuthProvider` that gates `/mcp` behind OAuth 2.1 and delegates everything else (`/authorize`, `/oauth-callback`, `/healthz`) to the default handler. Also implements `/token`, `/register`, and `/.well-known/oauth-authorization-server`.
+- `src/auth/google-handler.ts` — The default handler. `/authorize` redirects to Google with the `AuthRequest` encoded in `state`. `/oauth-callback` exchanges the Google code, decodes the `id_token`, enforces the `@cgtrader.com` domain, and calls `completeAuthorization` so the provider can issue an MCP access token. Also serves `/healthz`.
+- `src/mcp-agent.ts` — `CgTraderMCP extends McpAgent<Env, unknown, AuthProps>`. Lives in a SQLite-backed Durable Object (binding `MCP_OBJECT`). Registers tools in `init()` and warms the CGTrader OAuth token before any request is served. The authenticated user's props (`email`, `sub`, `name`) are available as `this.props`.
+- `src/services/token.ts` — CGTrader-side OAuth `client_credentials` (server → CGTrader, separate from the Google-side user auth). In-memory cache with refresh leeway; invalidated on 401.
+- `src/services/client.ts` — Thin `fetch` wrapper that attaches `Authorization: Bearer <cgtrader-token>` and retries once on 401.
+- `src/tools/*.ts` — Tool definitions. Receive `env` via `registerModelTools(server, env)` / `registerCategoryTools(server, env)`.
+
+## Requirements
+
+- **Node.js ≥ 20** (enforced via `package.json#engines`) and npm.
+- **Cloudflare account** (free Workers plan is enough) — sign up at <https://dash.cloudflare.com/sign-up>. Wrangler will prompt for browser login on first use; no global binary install needed (it's a devDependency and runs via `npx`/`npm run`).
+- **Google Cloud project** — for creating the OAuth 2.0 client in step 2 of Setup.
+- **CGTrader account** — to register the OAuth application in step 1 of Setup.
 
 ## Setup
 
@@ -39,29 +47,45 @@ Go to <https://www.cgtrader.com/oauth/applications/new> and create an app:
 
 Copy the issued **client_id** and **client_secret**.
 
-### 2. Install
+### 2. Register a Google Cloud OAuth 2.0 Client
+
+This is what Claude's Custom Connector will use (indirectly) to sign users in with Google Workspace.
+
+- Google Cloud Console → <https://console.cloud.google.com/apis/credentials>
+- **Create Credentials → OAuth client ID**
+- **Application type:** Web application
+- **Authorized redirect URIs:**
+  - `http://127.0.0.1:8787/oauth-callback` (local dev)
+  - `https://<your-worker-subdomain>.workers.dev/oauth-callback` (prod — add once deployed)
+- Under the consent screen settings, set **User type: Internal** so only your Workspace can sign in.
+
+Copy the resulting **Client ID** and **Client secret**.
+
+### 3. Install
 
 ```bash
 npm install
 ```
 
-### 3. Create `.dev.vars` (local secrets for `wrangler dev`)
+### 4. Create `.dev.vars` (local secrets for `wrangler dev`)
 
-```
-CGTRADER_CLIENT_ID=your-client-id
-CGTRADER_CLIENT_SECRET=your-client-secret
+```bash
+cp .dev.vars.example .dev.vars
 ```
 
-`.dev.vars` is the Wrangler equivalent of `.env` — it's auto-loaded by `wrangler dev` and is gitignored. For production secrets, use `wrangler secret put CGTRADER_CLIENT_ID` / `wrangler secret put CGTRADER_CLIENT_SECRET` instead.
+Then fill in the four credentials from steps 1 and 2. `.dev.vars` is the Wrangler equivalent of `.env` — auto-loaded by `wrangler dev` and gitignored. Production secrets are set with `wrangler secret put` (see [Deploy](#deploy)).
 
 ### Environment variables
 
-| Var | Default | Notes |
-| --- | --- | --- |
-| `CGTRADER_CLIENT_ID` | _(required)_ | OAuth application client id. |
-| `CGTRADER_CLIENT_SECRET` | _(required)_ | OAuth application client secret. |
-| `CGTRADER_OAUTH_TOKEN_URL` | `https://www.cgtrader.com/oauth/token` | Override if CGTrader's token endpoint differs. |
-| `CGTRADER_OAUTH_SCOPE` | _(unset)_ | Optional scope to request. |
+| Var | Kind | Default | Notes |
+| --- | --- | --- | --- |
+| `CGTRADER_CLIENT_ID` | secret | _(required)_ | CGTrader OAuth app client id. |
+| `CGTRADER_CLIENT_SECRET` | secret | _(required)_ | CGTrader OAuth app client secret. |
+| `CGTRADER_OAUTH_TOKEN_URL` | var | `https://www.cgtrader.com/oauth/token` | Override if CGTrader's token endpoint differs. |
+| `CGTRADER_OAUTH_SCOPE` | var | _(unset)_ | Optional scope to request. |
+| `GOOGLE_CLIENT_ID` | secret | _(required)_ | Google OAuth Client ID. |
+| `GOOGLE_CLIENT_SECRET` | secret | _(required)_ | Google OAuth Client Secret. |
+| `ALLOWED_EMAIL_DOMAIN` | var | `cgtrader.com` | Email domain allow-list (checked against Google's `hd` claim and `email` suffix). Unset to disable. |
 
 ## Development
 
@@ -73,7 +97,11 @@ npm run dev
 # [wrangler:info] Ready on http://localhost:8787
 ```
 
-This starts `wrangler dev`, which runs the Worker in a local Miniflare sandbox. The MCP endpoint is `http://localhost:8787/mcp`; liveness is at `http://localhost:8787/healthz`.
+This starts `wrangler dev`, which runs the Worker in a local Miniflare sandbox (including an in-memory KV for the OAuth provider's grant/token storage). Useful endpoints:
+
+- `http://localhost:8787/mcp` — MCP Streamable HTTP endpoint (requires a valid access token).
+- `http://localhost:8787/healthz` — liveness check (unauth).
+- `http://localhost:8787/.well-known/oauth-authorization-server` — OAuth metadata discovery (unauth).
 
 ### Typecheck
 
@@ -81,76 +109,68 @@ This starts `wrangler dev`, which runs the Worker in a local Miniflare sandbox. 
 npm run typecheck
 ```
 
-### Deploy
+## Testing with MCP Inspector
+
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) is Anthropic's official web UI for debugging MCP servers. It supports OAuth 2.1 discovery, so it will drive the full Google sign-in flow end-to-end and then let you exercise tools.
+
+1. Start the server: `npm run dev`
+2. In another terminal: `npx @modelcontextprotocol/inspector`. Opens `http://127.0.0.1:6274`.
+3. In the inspector UI:
+   - **Transport:** `Streamable HTTP`
+   - **URL:** `http://localhost:8787/mcp`
+   - Paste the **Proxy Session Token** printed in the `npx` terminal.
+   - Click **Connect**. You'll be redirected to Google, pick your `@cgtrader.com` account, consented back to the inspector, then arrive at the Tools tab.
+4. **Tools → List Tools** shows the eight `cgtrader_*` tools. Pick one, fill in arguments, **Run Tool**. The **History** tab shows raw JSON-RPC frames for debugging.
+
+### Unauth smoke checks (no OAuth needed)
+
+```bash
+curl -sS http://localhost:8787/healthz
+curl -sS http://localhost:8787/.well-known/oauth-authorization-server | jq
+curl -sS -i http://localhost:8787/mcp   # expect 401 invalid_token
+```
+
+## Deploy
+
+### 1. Create the OAuth KV namespace (once)
+
+```bash
+wrangler kv namespace create OAUTH_KV
+```
+
+Copy the returned `id` into `wrangler.jsonc` under `kv_namespaces[0].id` (replaces the placeholder).
+
+### 2. Set production secrets (once, or when rotating)
+
+```bash
+wrangler secret put CGTRADER_CLIENT_ID
+wrangler secret put CGTRADER_CLIENT_SECRET
+wrangler secret put GOOGLE_CLIENT_ID
+wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+### 3. Deploy
 
 ```bash
 npm run deploy   # wrangler deploy
 ```
 
-Before the first deploy, set production secrets:
+Once deployed, add the prod `oauth-callback` URL (`https://<worker>.workers.dev/oauth-callback`) to the Google OAuth client's **Authorized redirect URIs** in the Google Cloud Console.
 
-```bash
-wrangler secret put CGTRADER_CLIENT_ID
-wrangler secret put CGTRADER_CLIENT_SECRET
-```
-
-## Testing with MCP Inspector
-
-[MCP Inspector](https://github.com/modelcontextprotocol/inspector) is Anthropic's official web UI for debugging MCP servers. It connects to any MCP server and lets you interactively browse tool/resource/prompt definitions, call tools with arbitrary arguments, and inspect the JSON-RPC traffic. It's the best tool for developing a server — much faster than round-tripping through Claude Desktop.
-
-### Usage
-
-1. Start the server:
-   ```bash
-   npm run dev
-   ```
-2. In another terminal, launch the inspector (no install needed — `npx` fetches it):
-   ```bash
-   npx @modelcontextprotocol/inspector
-   ```
-   It opens a browser tab at `http://127.0.0.1:6274`.
-3. In the inspector UI:
-   - **Transport:** `Streamable HTTP`
-   - **URL:** `http://localhost:8787/mcp`
-   - Paste the **Proxy Session Token** printed in the `npx` terminal.
-   - Click **Connect**.
-4. Exercise the server:
-   - Open **Tools → List Tools** — you should see all eight `cgtrader_*` tools.
-   - Pick one (e.g. `cgtrader_list_categories`), fill in arguments in the right-hand panel, hit **Run Tool**.
-   - The `History` tab shows the raw JSON-RPC frames — useful for debugging schemas or unexpected shapes.
-
-### Quick curl smoke test (no inspector)
-
-```bash
-# initialize → capture the session id
-SESSION_ID=$(curl -sS -D - -o /dev/null -X POST http://localhost:8787/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}' \
-  | grep -i '^mcp-session-id:' | sed 's/.*: *//' | tr -d '\r\n')
-
-# send initialized notification
-curl -sS -X POST http://localhost:8787/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "mcp-session-id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-
-# list tools
-curl -sS -X POST http://localhost:8787/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "mcp-session-id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-```
+Users add the server to Claude as a **Custom Connector** pointing at `https://<worker>.workers.dev/mcp` — Claude performs Dynamic Client Registration, OAuth discovery, and the Google sign-in dance automatically. No config files, no shared secrets handed out to teammates.
 
 ## Endpoints
 
-- `POST /mcp` — MCP Streamable HTTP endpoint.
-- `GET /healthz` — liveness check.
+- `POST /mcp` — MCP Streamable HTTP endpoint. Requires a bearer access token issued by this provider.
+- `GET /.well-known/oauth-authorization-server` — OAuth 2.1 server metadata (RFC 8414).
+- `POST /register` — Dynamic Client Registration (RFC 7591). Claude uses this to register itself.
+- `GET /authorize` — Authorization endpoint. Redirects to Google.
+- `GET /oauth-callback` — Returns from Google, issues the MCP access token.
+- `POST /token` — Token endpoint (code → access token exchange, refresh).
+- `GET /healthz` — Liveness check (unauth).
 
 ## Notes
 
 - `cgtrader_download_free_file` and `cgtrader_get_free_model_download_urls` do **not** stream binary data through MCP — they return short-lived signed S3 URLs meant for the end user's browser. Fetch promptly.
-- CGTrader's public API docs describe "API key" auth, but the `/oauth/applications` URL pattern is standard Doorkeeper OAuth 2. This server uses `client_credentials` to get a bearer token, which is then used on every `api.cgtrader.com/v1/*` call.
-- The MCP endpoint is currently **unauthenticated** and is only safe on localhost. OAuth 2.1 with Google Workspace SSO will gate `/mcp` in front of the Durable Object before any public deployment.
+- CGTrader's public API docs describe "API key" auth, but the `/oauth/applications` URL pattern is standard Doorkeeper OAuth 2. The server uses `client_credentials` to get a bearer token for CGTrader (separate from the user-facing Google auth).
+- The user-facing `@cgtrader.com` domain check is enforced in two places: Google's own `hd` query-param hint on the consent screen, and a server-side re-check against both the `hd` claim and the `email` claim of the returned `id_token`. Trust the server-side check; the `hd` hint is only a UX nicety.

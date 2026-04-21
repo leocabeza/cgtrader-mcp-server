@@ -1,0 +1,16 @@
+# Local dev secrets for `wrangler dev`. Copy to `.dev.vars` and fill in.
+# Production values are set via `wrangler secret put <NAME>`.
+
+# CGTrader OAuth client_credentials app — https://www.cgtrader.com/oauth/applications/new
+CGTRADER_CLIENT_ID=your-cgtrader-client-id
+CGTRADER_CLIENT_SECRET=your-cgtrader-client-secret
+
+# Optional: override the CGTrader OAuth token endpoint
+# CGTRADER_OAUTH_TOKEN_URL=https://www.cgtrader.com/oauth/token
+
+# Optional: request a specific CGTrader OAuth scope
+# CGTRADER_OAUTH_SCOPE=public
+
+# Google OAuth app (used to authenticate end users of the MCP server)
+GOOGLE_CLIENT_ID=your-google-oauth-client-id
+GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret

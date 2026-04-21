@@ -1,0 +1,14 @@
+export const API_BASE_URL = "https://api.cgtrader.com/v1";
+export const OAUTH_TOKEN_URL_DEFAULT = "https://www.cgtrader.com/oauth/token";
+export const CLIENT_ID_ENV = "CGTRADER_CLIENT_ID";
+export const CLIENT_SECRET_ENV = "CGTRADER_CLIENT_SECRET";
+export const OAUTH_TOKEN_URL_ENV = "CGTRADER_OAUTH_TOKEN_URL";
+export const OAUTH_SCOPE_ENV = "CGTRADER_OAUTH_SCOPE";
+export const REQUEST_TIMEOUT_MS = 30_000;
+export const OAUTH_TIMEOUT_MS = 15_000;
+export const TOKEN_REFRESH_LEEWAY_S = 60;
+export const CHARACTER_LIMIT = 25_000;
+export const DEFAULT_PAGE_SIZE = 25;
+export const MAX_PAGE_SIZE = 100;
+export const SERVER_NAME = "cgtrader-mcp-server";
+export const SERVER_VERSION = "0.1.0";

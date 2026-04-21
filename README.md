@@ -136,18 +136,20 @@ curl -sS -i http://localhost:8787/mcp   # expect 401 invalid_token
 ### 1. Create the OAuth KV namespace (once)
 
 ```bash
-wrangler kv namespace create OAUTH_KV
+npx wrangler kv namespace create OAUTH_KV
 ```
 
 Copy the returned `id` into `wrangler.jsonc` under `kv_namespaces[0].id` (replaces the placeholder).
 
+First time you run `npx wrangler` it'll open a browser to log in to Cloudflare; stays logged in after.
+
 ### 2. Set production secrets (once, or when rotating)
 
 ```bash
-wrangler secret put CGTRADER_CLIENT_ID
-wrangler secret put CGTRADER_CLIENT_SECRET
-wrangler secret put GOOGLE_CLIENT_ID
-wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put CGTRADER_CLIENT_ID
+npx wrangler secret put CGTRADER_CLIENT_SECRET
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
 ### 3. Deploy
@@ -159,6 +161,28 @@ npm run deploy   # wrangler deploy
 Once deployed, add the prod `oauth-callback` URL (`https://<worker>.workers.dev/oauth-callback`) to the Google OAuth client's **Authorized redirect URIs** in the Google Cloud Console.
 
 Users add the server to Claude as a **Custom Connector** pointing at `https://<worker>.workers.dev/mcp` — Claude performs Dynamic Client Registration, OAuth discovery, and the Google sign-in dance automatically. No config files, no shared secrets handed out to teammates.
+
+### CI/CD (GitHub Actions)
+
+`.github/workflows/deploy.yml` runs on every push and PR:
+
+- **typecheck** job — `npm ci` + `npm run typecheck` on every push and PR.
+- **deploy** job — runs only on pushes to `main`, after typecheck passes. Uses [`cloudflare/wrangler-action@v3`](https://github.com/cloudflare/wrangler-action) to run `wrangler deploy`.
+
+#### Required GitHub repo secrets
+
+Settings → Secrets and variables → Actions:
+
+| Secret | Where to get it |
+| --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → right sidebar on the Workers & Pages overview. |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare dashboard → My Profile → API Tokens → **Create Token → "Edit Cloudflare Workers"** template (covers Workers Scripts:Edit, Workers KV Storage:Edit, Account Settings:Read, User Details:Read). Scope it to a single account. |
+
+The workflow uses a GitHub **environment** named `production` — optional to create, but if you want manual approval on prod deploys, add the environment in Settings → Environments with "Required reviewers" turned on.
+
+#### App secrets stay out of GitHub Actions
+
+`CGTRADER_CLIENT_ID`, `CGTRADER_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` are **deliberately not** in GitHub Actions. They're set one-time via `wrangler secret put` (step 2 above) and live only in the Workers runtime environment. CI deploys code, not credentials — so a compromised GHA token can redeploy but can't exfiltrate app secrets.
 
 ## Endpoints
 

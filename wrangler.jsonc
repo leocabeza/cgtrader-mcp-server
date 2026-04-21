@@ -1,22 +1,37 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cgtrader-mcp",
-  "main": "src/worker.ts",
-  "compatibility_date": "2026-03-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "durable_objects": {
-    "bindings": [
-      { "name": "MCP_OBJECT", "class_name": "CgTraderMCP" }
-    ]
-  },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["CgTraderMCP"] }
-  ],
-  "kv_namespaces": [
-    { "binding": "OAUTH_KV", "id": "placeholder-run-wrangler-kv-namespace-create-OAUTH_KV" }
-  ],
-  "vars": {
-    "ALLOWED_EMAIL_DOMAIN": "cgtrader.com"
-  },
-  "observability": { "enabled": true }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cgtrader-mcp",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-03-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "MCP_OBJECT",
+				"class_name": "CgTraderMCP"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"CgTraderMCP"
+			]
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "c50a9e5ae2294b6ca5480e55518a672c"
+		}
+	],
+	"vars": {
+		"ALLOWED_EMAIL_DOMAIN": "cgtrader.com"
+	},
+	"observability": {
+		"enabled": true
+	}
 }

@@ -110,7 +110,24 @@ This starts `wrangler dev`, which runs the Worker in a local Miniflare sandbox (
 pnpm typecheck
 ```
 
-## Testing with MCP Inspector
+## Testing
+
+### Automated tests (vitest)
+
+```bash
+pnpm test          # one-shot (CI-friendly)
+pnpm test:watch    # re-run on change
+```
+
+Tests live alongside the code they cover (`src/**/*.test.ts`) and run in a plain Node environment — **no Miniflare or Cloudflare runtime is spun up**. The suite is structured in three tiers, each demonstrating a pattern worth reusing:
+
+- **Pure helpers** (`src/services/format.test.ts`) — zero-mock unit tests for string formatting / truncation.
+- **Mocked-fetch services** (`src/services/token.test.ts`) — spies on `globalThis.fetch` to exercise the CGTrader OAuth token exchange, L1 caching, and failure modes. `caches.default` is polyfilled by `test/setup.ts` with an in-memory `Map`, so any module that touches the Workers Cache API works under vitest without the Workers runtime.
+- **In-memory MCP roundtrips** (`src/tools/categories.test.ts`) — builds a bare `McpServer`, mocks `apiGet`, links it to an MCP `Client` via `InMemoryTransport.createLinkedPair()`, and drives real protocol calls (`listTools`, `callTool`). This tests the actual tool contract — input schemas, structured content, `isError` behavior — without going through the Durable Object or HTTP transport.
+
+What this **doesn't** cover: the `McpAgent` HTTP/DO wrapper, OAuth handshake, or real Cache API semantics. If that coverage becomes interesting, add `@cloudflare/vitest-pool-workers` as a second tier — the existing tests stay as-is.
+
+### Manual testing with MCP Inspector
 
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is Anthropic's official web UI for debugging MCP servers. It supports OAuth 2.1 discovery, so it will drive the full Google sign-in flow end-to-end and then let you exercise tools.
 
@@ -168,7 +185,7 @@ Continuous deployment is handled by [Workers Builds](https://developers.cloudfla
 
 - **Trigger:** every push to `main`.
 - **Package manager:** pnpm is pinned via `package.json#packageManager`; Workers Builds' corepack auto-provisions it when the lockfile is `pnpm-lock.yaml`.
-- **Build command:** `pnpm install --frozen-lockfile && pnpm typecheck` — a type error fails the build and blocks deploy.
+- **Build command:** `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test` — a type error or failing test fails the build and blocks deploy. (Test gating is configured here, **not** in the `deploy` script, so local `pnpm deploy` stays fast while the authoritative gate runs in CI.)
 - **Deploy command:** `pnpm exec wrangler deploy`.
 - **Preview deployments:** PRs get their own preview URLs automatically; status checks post back to GitHub.
 

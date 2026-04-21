@@ -1,6 +1,6 @@
 # cgtrader-mcp-server
 
-MCP server exposing the [CGTrader](https://api.cgtrader.com) marketplace — **free models only**. Talks to MCP clients over **streamable HTTP**.
+MCP server exposing the [CGTrader](https://api.cgtrader.com) marketplace — **free models only**. Runs on **Cloudflare Workers** and speaks MCP over **Streamable HTTP**.
 
 ## Tools
 
@@ -19,38 +19,40 @@ The free-only guarantee is enforced two ways:
 1. `cgtrader_search_models` forces `min_price=0` and `max_price=0` on the API request.
 2. Every per-model tool (`get_model`, `get_model_images`, `get_model_license`, `download_free_file`) fetches `/v1/models/:id` and refuses if `prices.download !== 0`.
 
+## Architecture
+
+- `src/worker.ts` — Workers entrypoint. Routes `/healthz` and `/mcp`.
+- `src/mcp-agent.ts` — `CgTraderMCP extends McpAgent<Env>`. Lives in a SQLite-backed Durable Object (binding `MCP_OBJECT`). Registers tools in `init()` and warms the OAuth token before any request is served.
+- `src/services/token.ts` — OAuth `client_credentials` against CGTrader. In-memory cache with refresh leeway; invalidated on 401.
+- `src/services/client.ts` — Thin `fetch` wrapper that attaches `Authorization: Bearer <token>` and retries once on 401.
+- `src/tools/*.ts` — Tool definitions. Receive `env` via `registerModelTools(server, env)` / `registerCategoryTools(server, env)` so tool closures can reach the OAuth credentials without module-level state.
+
 ## Setup
 
-### 1. Register an OAuth application
+### 1. Register an OAuth application on CGTrader
 
 Go to <https://www.cgtrader.com/oauth/applications/new> and create an app:
 
-- **Name:** anything you'll recognize (e.g. "CGTrader MCP Server").
-- **Redirect URI:** `http://127.0.0.1:3000/oauth/callback` (not used by `client_credentials` at runtime, but Doorkeeper requires the field be non-empty; if the form rejects non-HTTPS URIs, use `urn:ietf:wg:oauth:2.0:oob` instead).
+- **Name:** anything recognizable (e.g. "CGTrader MCP Server").
+- **Redirect URI:** `http://127.0.0.1/oauth/callback` (not used by `client_credentials` at runtime, but Doorkeeper requires the field be non-empty; if the form rejects non-HTTPS URIs, use `urn:ietf:wg:oauth:2.0:oob`).
 - **Confidential / Trusted:** yes — this is a server-side app with a secret.
 
 Copy the issued **client_id** and **client_secret**.
 
-### 2. Install and configure
+### 2. Install
 
 ```bash
 npm install
-npm run build
-
-cp .env.example .env   # then fill in CGTRADER_CLIENT_ID / CGTRADER_CLIENT_SECRET
 ```
 
-### 3. Run
+### 3. Create `.dev.vars` (local secrets for `wrangler dev`)
 
-```bash
-export CGTRADER_CLIENT_ID=...
-export CGTRADER_CLIENT_SECRET=...
-npm start
-# OAuth client_credentials token acquired successfully.
-# cgtrader-mcp-server v0.1.0 listening on http://127.0.0.1:3000/mcp
+```
+CGTRADER_CLIENT_ID=your-client-id
+CGTRADER_CLIENT_SECRET=your-client-secret
 ```
 
-The server performs an OAuth `client_credentials` exchange at startup to fail fast on bad credentials, then caches the access token and refreshes it automatically (60s before `expires_in`, or on any 401 response).
+`.dev.vars` is the Wrangler equivalent of `.env` — it's auto-loaded by `wrangler dev` and is gitignored. For production secrets, use `wrangler secret put CGTRADER_CLIENT_ID` / `wrangler secret put CGTRADER_CLIENT_SECRET` instead.
 
 ### Environment variables
 
@@ -60,23 +62,95 @@ The server performs an OAuth `client_credentials` exchange at startup to fail fa
 | `CGTRADER_CLIENT_SECRET` | _(required)_ | OAuth application client secret. |
 | `CGTRADER_OAUTH_TOKEN_URL` | `https://www.cgtrader.com/oauth/token` | Override if CGTrader's token endpoint differs. |
 | `CGTRADER_OAUTH_SCOPE` | _(unset)_ | Optional scope to request. |
-| `PORT` | `3000` | HTTP port. |
-| `HOST` | `127.0.0.1` | Bind address. Keep on loopback unless you add auth in front. |
-
-## Endpoints
-
-- `POST /mcp` — MCP streamable HTTP endpoint (stateless per-request).
-- `GET /healthz` — simple liveness check.
 
 ## Development
 
+### Run locally
+
 ```bash
-npm run dev   # tsx watch
-npm run build # tsc -> dist/
+npm run dev
+# ⎔ Starting local server...
+# [wrangler:info] Ready on http://localhost:8787
 ```
+
+This starts `wrangler dev`, which runs the Worker in a local Miniflare sandbox. The MCP endpoint is `http://localhost:8787/mcp`; liveness is at `http://localhost:8787/healthz`.
+
+### Typecheck
+
+```bash
+npm run typecheck
+```
+
+### Deploy
+
+```bash
+npm run deploy   # wrangler deploy
+```
+
+Before the first deploy, set production secrets:
+
+```bash
+wrangler secret put CGTRADER_CLIENT_ID
+wrangler secret put CGTRADER_CLIENT_SECRET
+```
+
+## Testing with MCP Inspector
+
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) is Anthropic's official web UI for debugging MCP servers. It connects to any MCP server and lets you interactively browse tool/resource/prompt definitions, call tools with arbitrary arguments, and inspect the JSON-RPC traffic. It's the best tool for developing a server — much faster than round-tripping through Claude Desktop.
+
+### Usage
+
+1. Start the server:
+   ```bash
+   npm run dev
+   ```
+2. In another terminal, launch the inspector (no install needed — `npx` fetches it):
+   ```bash
+   npx @modelcontextprotocol/inspector
+   ```
+   It opens a browser tab at `http://127.0.0.1:6274`.
+3. In the inspector UI:
+   - **Transport:** `Streamable HTTP`
+   - **URL:** `http://localhost:8787/mcp`
+   - Paste the **Proxy Session Token** printed in the `npx` terminal.
+   - Click **Connect**.
+4. Exercise the server:
+   - Open **Tools → List Tools** — you should see all eight `cgtrader_*` tools.
+   - Pick one (e.g. `cgtrader_list_categories`), fill in arguments in the right-hand panel, hit **Run Tool**.
+   - The `History` tab shows the raw JSON-RPC frames — useful for debugging schemas or unexpected shapes.
+
+### Quick curl smoke test (no inspector)
+
+```bash
+# initialize → capture the session id
+SESSION_ID=$(curl -sS -D - -o /dev/null -X POST http://localhost:8787/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}' \
+  | grep -i '^mcp-session-id:' | sed 's/.*: *//' | tr -d '\r\n')
+
+# send initialized notification
+curl -sS -X POST http://localhost:8787/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+# list tools
+curl -sS -X POST http://localhost:8787/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+```
+
+## Endpoints
+
+- `POST /mcp` — MCP Streamable HTTP endpoint.
+- `GET /healthz` — liveness check.
 
 ## Notes
 
-- `cgtrader_download_free_file` does **not** stream binary data through the MCP — it returns the signed redirect URL so the client can download directly. Signed URLs are short-lived; fetch promptly.
-- CGTrader's public API docs describe "API key" auth, but the `/oauth/applications` URL pattern is standard Doorkeeper OAuth 2. This server uses `client_credentials` to get a bearer token from the OAuth token endpoint, which is then used on every `api.cgtrader.com/v1/*` call.
-# cgtrader-mcp-server
+- `cgtrader_download_free_file` and `cgtrader_get_free_model_download_urls` do **not** stream binary data through MCP — they return short-lived signed S3 URLs meant for the end user's browser. Fetch promptly.
+- CGTrader's public API docs describe "API key" auth, but the `/oauth/applications` URL pattern is standard Doorkeeper OAuth 2. This server uses `client_credentials` to get a bearer token, which is then used on every `api.cgtrader.com/v1/*` call.
+- The MCP endpoint is currently **unauthenticated** and is only safe on localhost. OAuth 2.1 with Google Workspace SSO will gate `/mcp` in front of the Durable Object before any public deployment.

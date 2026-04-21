@@ -1,13 +1,9 @@
-import axios from "axios";
 import {
-  CLIENT_ID_ENV,
-  CLIENT_SECRET_ENV,
-  OAUTH_SCOPE_ENV,
   OAUTH_TIMEOUT_MS,
   OAUTH_TOKEN_URL_DEFAULT,
-  OAUTH_TOKEN_URL_ENV,
   TOKEN_REFRESH_LEEWAY_S,
 } from "../constants.js";
+import type { Env } from "../env.js";
 
 interface TokenResponse {
   access_token: string;
@@ -25,29 +21,17 @@ interface CachedToken {
 let cached: CachedToken | null = null;
 let inFlight: Promise<CachedToken> | null = null;
 
-function readOAuthConfig(): {
-  clientId: string;
-  clientSecret: string;
-  tokenUrl: string;
-  scope?: string;
-} {
-  const clientId = process.env[CLIENT_ID_ENV];
-  const clientSecret = process.env[CLIENT_SECRET_ENV];
+async function fetchToken(env: Env): Promise<CachedToken> {
+  const clientId = env.CGTRADER_CLIENT_ID;
+  const clientSecret = env.CGTRADER_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
     throw new Error(
-      `${CLIENT_ID_ENV} and ${CLIENT_SECRET_ENV} env vars are required for OAuth client_credentials flow.`,
+      "CGTRADER_CLIENT_ID and CGTRADER_CLIENT_SECRET are required for OAuth client_credentials flow.",
     );
   }
-  return {
-    clientId,
-    clientSecret,
-    tokenUrl: process.env[OAUTH_TOKEN_URL_ENV] ?? OAUTH_TOKEN_URL_DEFAULT,
-    scope: process.env[OAUTH_SCOPE_ENV],
-  };
-}
+  const tokenUrl = env.CGTRADER_OAUTH_TOKEN_URL ?? OAUTH_TOKEN_URL_DEFAULT;
+  const scope = env.CGTRADER_OAUTH_SCOPE;
 
-async function fetchToken(): Promise<CachedToken> {
-  const { clientId, clientSecret, tokenUrl, scope } = readOAuthConfig();
   const body = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: clientId,
@@ -55,15 +39,31 @@ async function fetchToken(): Promise<CachedToken> {
   });
   if (scope) body.set("scope", scope);
 
-  const res = await axios.post<TokenResponse>(tokenUrl, body.toString(), {
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    timeout: OAUTH_TIMEOUT_MS,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OAUTH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(tokenUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: body.toString(),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
-  const data = res.data;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `OAuth token exchange failed at ${tokenUrl} (${res.status}): ${text.slice(0, 200)}`,
+    );
+  }
+
+  const data = (await res.json()) as TokenResponse;
   if (!data || typeof data.access_token !== "string") {
     throw new Error(
       `OAuth token endpoint at ${tokenUrl} did not return an access_token.`,
@@ -75,7 +75,10 @@ async function fetchToken(): Promise<CachedToken> {
   return { accessToken: data.access_token, refreshAt };
 }
 
-export async function getAccessToken(forceRefresh = false): Promise<string> {
+export async function getAccessToken(
+  env: Env,
+  forceRefresh = false,
+): Promise<string> {
   if (
     !forceRefresh &&
     cached &&
@@ -84,7 +87,7 @@ export async function getAccessToken(forceRefresh = false): Promise<string> {
     return cached.accessToken;
   }
   if (!inFlight) {
-    inFlight = fetchToken().finally(() => {
+    inFlight = fetchToken(env).finally(() => {
       inFlight = null;
     });
   }
@@ -101,7 +104,6 @@ export function invalidateToken(): void {
   cached = null;
 }
 
-/** For startup: force a token fetch to fail-fast on bad credentials. */
-export async function warmUpToken(): Promise<void> {
-  await getAccessToken(true);
+export async function warmUpToken(env: Env): Promise<void> {
+  await getAccessToken(env, true);
 }

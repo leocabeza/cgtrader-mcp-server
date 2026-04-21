@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { Env } from "../env.js";
 import {
   CGTraderImage,
   CGTraderLicense,
@@ -74,7 +75,7 @@ const SearchModelsInputSchema = z
 
 type SearchModelsInput = z.infer<typeof SearchModelsInputSchema>;
 
-function registerSearchModels(server: McpServer) {
+function registerSearchModels(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_search_models",
     {
@@ -142,6 +143,7 @@ Example:
         if (params.pbr !== undefined) apiParams.pbr = params.pbr;
 
         const data = await apiGet<CGTraderModelListResponse>(
+          env,
           "/models",
           apiParams,
         );
@@ -223,7 +225,7 @@ function modelToMarkdown(m: CGTraderModel): string {
   return lines.join("\n");
 }
 
-function registerGetModel(server: McpServer) {
+function registerGetModel(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_get_model",
     {
@@ -247,7 +249,7 @@ Returns: the full model object (id, title, author_name, url, category_id, subcat
     },
     async (params: GetModelInput) => {
       try {
-        const model = await fetchFreeModelOrThrow(params.model_id);
+        const model = await fetchFreeModelOrThrow(env, params.model_id);
         const text = renderText(
           params.response_format,
           modelToMarkdown(model),
@@ -284,7 +286,7 @@ const GetModelImagesInputSchema = z
 
 type GetModelImagesInput = z.infer<typeof GetModelImagesInputSchema>;
 
-function registerGetModelImages(server: McpServer) {
+function registerGetModelImages(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_get_model_images",
     {
@@ -308,8 +310,9 @@ Returns: { model_id, count, images: [{ id, url, width, height, ... }] }.`,
     },
     async (params: GetModelImagesInput) => {
       try {
-        await fetchFreeModelOrThrow(params.model_id);
+        await fetchFreeModelOrThrow(env, params.model_id);
         const data = await apiGet<{ images?: CGTraderImage[] } | CGTraderImage[]>(
+          env,
           `/models/${params.model_id}/images`,
         );
         const images: CGTraderImage[] = Array.isArray(data)
@@ -361,7 +364,7 @@ const GetModelLicenseInputSchema = z
 
 type GetModelLicenseInput = z.infer<typeof GetModelLicenseInputSchema>;
 
-function registerGetModelLicense(server: McpServer) {
+function registerGetModelLicense(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_get_model_license",
     {
@@ -385,8 +388,9 @@ Returns: the raw license object from the CGTrader API (name, description, terms,
     },
     async (params: GetModelLicenseInput) => {
       try {
-        await fetchFreeModelOrThrow(params.model_id);
+        await fetchFreeModelOrThrow(env, params.model_id);
         const license = await apiGet<CGTraderLicense>(
+          env,
           `/models/${params.model_id}/license`,
         );
         const md = [
@@ -427,13 +431,12 @@ const AGENT_HANDOFF_NOTE =
   "IMPORTANT FOR AGENTS: CGTrader's S3 hosts are not on typical agent-sandbox network allowlists. Do NOT attempt to fetch these URLs from a code-execution sandbox — present them directly to the end user as clickable links. The URLs are meant for the user's browser.";
 
 async function resolveSignedUrl(
+  env: Env,
   modelId: number,
   fileId: number,
 ): Promise<string> {
-  const res = await apiGetRaw(`/models/${modelId}/files/${fileId}`);
-  const location =
-    (res.headers?.location as string | undefined) ??
-    (res.headers?.Location as string | undefined);
+  const res = await apiGetRaw(env, `/models/${modelId}/files/${fileId}`);
+  const location = res.headers.get("location");
   if (!location) {
     throw new Error(
       `CGTrader did not return a redirect Location for file ${fileId} on model ${modelId} (status ${res.status}).`,
@@ -467,7 +470,7 @@ const DownloadFreeFileInputSchema = z
 
 type DownloadFreeFileInput = z.infer<typeof DownloadFreeFileInputSchema>;
 
-function registerDownloadFreeFile(server: McpServer) {
+function registerDownloadFreeFile(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_download_free_file",
     {
@@ -493,7 +496,7 @@ Returns: { model_id, file_id, download_url, expires_hint }.`,
     },
     async (params: DownloadFreeFileInput) => {
       try {
-        const model = await fetchFreeModelOrThrow(params.model_id);
+        const model = await fetchFreeModelOrThrow(env, params.model_id);
         const fileBelongs = model.files?.some((f) => f.id === params.file_id);
         if (model.files && !fileBelongs) {
           return {
@@ -507,7 +510,7 @@ Returns: { model_id, file_id, download_url, expires_hint }.`,
           };
         }
 
-        const url = await resolveSignedUrl(params.model_id, params.file_id);
+        const url = await resolveSignedUrl(env, params.model_id, params.file_id);
         const file = model.files?.find((f) => f.id === params.file_id);
         const label = file ? fileLabel(file) : `file ${params.file_id}`;
 
@@ -560,7 +563,7 @@ type GetFreeModelDownloadUrlsInput = z.infer<
   typeof GetFreeModelDownloadUrlsInputSchema
 >;
 
-function registerGetFreeModelDownloadUrls(server: McpServer) {
+function registerGetFreeModelDownloadUrls(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_get_free_model_download_urls",
     {
@@ -591,7 +594,7 @@ Returns:
     },
     async (params: GetFreeModelDownloadUrlsInput) => {
       try {
-        const model = await fetchFreeModelOrThrow(params.model_id);
+        const model = await fetchFreeModelOrThrow(env, params.model_id);
         const files = model.files ?? [];
         if (files.length === 0) {
           return {
@@ -613,7 +616,7 @@ Returns:
         const results = await Promise.all(
           files.map(async (f) => {
             try {
-              const url = await resolveSignedUrl(params.model_id, f.id);
+              const url = await resolveSignedUrl(env, params.model_id, f.id);
               return {
                 file_id: f.id,
                 name: f.name,
@@ -680,11 +683,11 @@ Returns:
   );
 }
 
-export function registerModelTools(server: McpServer) {
-  registerSearchModels(server);
-  registerGetModel(server);
-  registerGetModelImages(server);
-  registerGetModelLicense(server);
-  registerDownloadFreeFile(server);
-  registerGetFreeModelDownloadUrls(server);
+export function registerModelTools(server: McpServer, env: Env) {
+  registerSearchModels(server, env);
+  registerGetModel(server, env);
+  registerGetModelImages(server, env);
+  registerGetModelLicense(server, env);
+  registerDownloadFreeFile(server, env);
+  registerGetFreeModelDownloadUrls(server, env);
 }

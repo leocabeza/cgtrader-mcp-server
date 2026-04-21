@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { Env } from "../env.js";
 import { CGTraderCategory } from "../types.js";
 import { apiGet, handleApiError } from "../services/client.js";
 import { renderText } from "../services/format.js";
@@ -13,7 +14,7 @@ const ListCategoriesInputSchema = z
 
 type ListCategoriesInput = z.infer<typeof ListCategoriesInputSchema>;
 
-function registerListCategories(server: McpServer) {
+function registerListCategories(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_list_categories",
     {
@@ -38,7 +39,7 @@ Returns: { count, categories: [{ id, name, slug, parent_id, ... }] }.`,
       try {
         const data = await apiGet<
           { categories?: CGTraderCategory[] } | CGTraderCategory[]
-        >("/categories");
+        >(env, "/categories");
         const categories: CGTraderCategory[] = Array.isArray(data)
           ? data
           : (data.categories ?? []);
@@ -75,7 +76,7 @@ const GetCategoryInputSchema = z
 
 type GetCategoryInput = z.infer<typeof GetCategoryInputSchema>;
 
-function registerGetCategory(server: McpServer) {
+function registerGetCategory(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_get_category",
     {
@@ -99,7 +100,7 @@ Returns: the full category object (id, name, slug, parent_id, description, ...).
       try {
         const data = await apiGet<
           { category?: CGTraderCategory } | CGTraderCategory
-        >(`/categories/${params.category_id}`);
+        >(env, `/categories/${params.category_id}`);
         const category: CGTraderCategory =
           (data as { category?: CGTraderCategory }).category ??
           (data as CGTraderCategory);
@@ -128,7 +129,7 @@ Returns: the full category object (id, name, slug, parent_id, description, ...).
   );
 }
 
-export function registerCategoryTools(server: McpServer) {
-  registerListCategories(server);
-  registerGetCategory(server);
+export function registerCategoryTools(server: McpServer, env: Env) {
+  registerListCategories(server, env);
+  registerGetCategory(server, env);
 }

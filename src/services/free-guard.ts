@@ -1,3 +1,4 @@
+import type { Env } from "../env.js";
 import { CGTraderModel } from "../types.js";
 import { apiGet } from "./client.js";
 
@@ -10,8 +11,12 @@ export function isFreeModel(model: Pick<CGTraderModel, "prices">): boolean {
  * Fetches a model by id and throws a FreeOnlyViolation if it is not free.
  * Returned model is guaranteed to have prices.download === 0.
  */
-export async function fetchFreeModelOrThrow(modelId: number): Promise<CGTraderModel> {
+export async function fetchFreeModelOrThrow(
+  env: Env,
+  modelId: number,
+): Promise<CGTraderModel> {
   const res = await apiGet<{ model?: CGTraderModel } | CGTraderModel>(
+    env,
     `/models/${modelId}`,
   );
   const model: CGTraderModel =

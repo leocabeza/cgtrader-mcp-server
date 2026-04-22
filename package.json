@@ -10,6 +10,7 @@
     "build:ui": "pnpm build:ui:search",
     "build:ui:search": "vite build ui/search --config ui/vite.config.ts",
     "typecheck": "tsc --noEmit",
+    "pretest": "pnpm build:ui",
     "test": "vitest run",
     "test:watch": "vitest"
   },

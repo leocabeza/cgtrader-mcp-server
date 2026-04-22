@@ -364,6 +364,17 @@ export function renderModelDetail(
     downloadsSection.hidden = result.files.length === 0;
   };
 
+  const showDownloadError = (msg: string): void => {
+    clearChildren(dlList);
+    dlHint.textContent = msg;
+    downloadsSection.hidden = false;
+  };
+
+  const firstTextContent = (res: CallToolResult): string | undefined => {
+    const block = res.content?.[0];
+    return block && block.type === "text" ? block.text : undefined;
+  };
+
   const onDownload = async (): Promise<void> => {
     downloadBtn.disabled = true;
     downloadBtn.textContent = "Fetching links…";
@@ -372,13 +383,26 @@ export function renderModelDetail(
         name: "cgtrader_get_free_model_download_urls",
         arguments: { model_id: model.id },
       });
+      if (res.isError) {
+        showDownloadError(
+          firstTextContent(res) ?? "Failed to fetch download links.",
+        );
+        return;
+      }
       const payload = res.structuredContent as DownloadResult | undefined;
-      if (payload) renderDownloads(payload);
+      if (payload) {
+        renderDownloads(payload);
+      } else {
+        showDownloadError(
+          firstTextContent(res) ??
+            "The server returned no download links. Try again in a moment.",
+        );
+      }
     } catch (e) {
       console.error("download fetch failed", e);
-      dlHint.textContent =
-        e instanceof Error ? e.message : "Failed to fetch download links.";
-      downloadsSection.hidden = false;
+      showDownloadError(
+        e instanceof Error ? e.message : "Failed to fetch download links.",
+      );
     } finally {
       downloadBtn.disabled = !(model.files && model.files.length > 0);
       downloadBtn.textContent = "Get free download";

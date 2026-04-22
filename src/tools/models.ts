@@ -932,10 +932,15 @@ const DownloadFreeFileInputSchema = z
 type DownloadFreeFileInput = z.infer<typeof DownloadFreeFileInputSchema>;
 
 function registerDownloadFreeFile(server: McpServer, env: Env) {
-  server.registerTool(
+  registerAppTool(
+    server,
     "cgtrader_download_free_file",
     {
       title: "Get download URL for a free CGTrader model file",
+      // Attached to the model-detail UI so the iframe can invoke it via
+      // app.callServerTool. Claude Desktop only forwards structuredContent
+      // back to the iframe for tools registered this way.
+      _meta: { ui: { resourceUri: MODEL_DETAIL_UI_RESOURCE_URI } },
       description: `Resolve a signed download URL for ONE file on a FREE CGTrader model.
 
 When the user wants to download a model with multiple files, prefer cgtrader_get_free_model_download_urls — it returns every file's URL in a single call instead of one call per file.
@@ -1039,10 +1044,15 @@ type GetFreeModelDownloadUrlsInput = z.infer<
 >;
 
 function registerGetFreeModelDownloadUrls(server: McpServer, env: Env) {
-  server.registerTool(
+  registerAppTool(
+    server,
     "cgtrader_get_free_model_download_urls",
     {
       title: "Get all download URLs for a free CGTrader model",
+      // Attached to the model-detail UI so the "Get free download" button
+      // inside the iframe can invoke it via app.callServerTool and receive
+      // the full structuredContent back.
+      _meta: { ui: { resourceUri: MODEL_DETAIL_UI_RESOURCE_URI } },
       description: `Resolve signed download URLs for EVERY file attached to a FREE CGTrader model, in a single call.
 
 Prefer this tool over cgtrader_download_free_file whenever the user wants to download a model (they almost always want all the files). It runs the per-file redirect fetches in parallel server-side, so the agent makes ONE tool call instead of N.

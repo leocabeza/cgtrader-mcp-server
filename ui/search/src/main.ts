@@ -8,13 +8,12 @@ import {
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "./styles.css";
 
-type Thumbnail = { url?: string; width?: number; height?: number };
 type Model = {
   id: number;
   title?: string;
   author_name?: string;
   url?: string;
-  thumbnails?: Thumbnail[];
+  thumbnails?: string[];
   availableFileExtensions?: string[];
   animated?: boolean;
   rigged?: boolean;
@@ -47,13 +46,7 @@ let currentResult: SearchResult | null = null;
 let displayMode: "inline" | "fullscreen" | string = "inline";
 
 function pickThumb(m: Model): string | undefined {
-  if (!m.thumbnails?.length) return undefined;
-  const withUrl = m.thumbnails.filter((t) => !!t.url);
-  if (!withUrl.length) return undefined;
-  const medium = withUrl.find(
-    (t) => (t.width ?? 0) >= 240 && (t.width ?? 0) <= 600,
-  );
-  return (medium ?? withUrl[0]).url;
+  return m.thumbnails?.find((t) => typeof t === "string" && t.length > 0);
 }
 
 function safeHttpUrl(value: string | undefined): string | null {

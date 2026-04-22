@@ -197,6 +197,28 @@ type SearchRefineValues = {
 const DECLINE_HINT =
   "> **User declined the refinement prompt.** If they seem unsatisfied with the results below, re-prompt them in natural language to describe what they actually want.";
 
+function buildSearchParams(p: SearchModelsInput): Record<string, unknown> {
+  const apiParams: Record<string, unknown> = {
+    page: p.page,
+    per_page: p.per_page,
+    sort: p.sort,
+    adult_content: p.adult_content,
+    // free-only enforcement:
+    min_price: 0,
+    max_price: 0,
+  };
+  if (p.keywords) apiParams.keywords = p.keywords;
+  if (p.category_id !== undefined) apiParams.category_id = p.category_id;
+  if (p.product_type) apiParams.product_type = p.product_type;
+  if (p.extensions) apiParams.extensions = p.extensions;
+  if (p.polygons) apiParams.polygons = p.polygons;
+  if (p.low_poly !== undefined) apiParams.low_poly = p.low_poly;
+  if (p.animated !== undefined) apiParams.animated = p.animated;
+  if (p.rigged !== undefined) apiParams.rigged = p.rigged;
+  if (p.pbr !== undefined) apiParams.pbr = p.pbr;
+  return apiParams;
+}
+
 function registerSearchModels(server: McpServer, env: Env) {
   registerAppTool(
     server,
@@ -249,12 +271,29 @@ Example:
         let effective: SearchModelsInput = params;
         let userNotes: string | null = null;
         let userDeclined = false;
-        if (!hasAnyRefinement(params)) {
+
+        let data = await apiGet<CGTraderModelListResponse>(
+          env,
+          "/models",
+          buildSearchParams(effective),
+        );
+
+        // Post-search refinement: only prompt on broad, first-page requests
+        // where the caller hasn't already narrowed anything. The grid is more
+        // informative than a blind pre-search form — the elicit references
+        // the actual result count.
+        const firstTotal = data.total ?? 0;
+        const shouldRefine =
+          effective.page === 1 &&
+          !hasAnyRefinement(effective) &&
+          firstTotal > effective.per_page;
+
+        if (shouldRefine) {
           const outcome = await elicitForm<SearchRefineValues>(
             server,
-            params.keywords
-              ? `Refine your search for "${params.keywords}" — pick any that matter, or submit as-is for best results.`
-              : "Refine the free-model search — pick any that matter, or submit as-is for best results.",
+            effective.keywords
+              ? `Found ${firstTotal.toLocaleString()} free models for "${effective.keywords}". Narrow it down, or submit as-is to browse.`
+              : `Found ${firstTotal.toLocaleString()} free models. Narrow it down, or submit as-is to browse.`,
             SEARCH_REFINE_SCHEMA,
           );
           if (outcome.status === "accepted") {
@@ -262,50 +301,32 @@ Example:
             if (typeof v.notes === "string" && v.notes.trim() !== "") {
               userNotes = v.notes.trim();
             }
-            effective = {
-              ...params,
+            const refined: SearchModelsInput = {
+              ...effective,
               ...(v.format && v.format !== "any"
                 ? { extensions: v.format }
                 : {}),
               ...(v.complexity && v.complexity !== "any"
                 ? { polygons: v.complexity as SearchModelsInput["polygons"] }
                 : {}),
-              ...(v.sort
-                ? { sort: v.sort as SearchModelsInput["sort"] }
-                : {}),
+              ...(v.sort ? { sort: v.sort as SearchModelsInput["sort"] } : {}),
             };
+            const narrowed =
+              refined.extensions !== effective.extensions ||
+              refined.polygons !== effective.polygons ||
+              refined.sort !== effective.sort;
+            if (narrowed) {
+              effective = refined;
+              data = await apiGet<CGTraderModelListResponse>(
+                env,
+                "/models",
+                buildSearchParams(effective),
+              );
+            }
           } else if (outcome.status === "declined") {
             userDeclined = true;
           }
         }
-
-        const apiParams: Record<string, unknown> = {
-          page: effective.page,
-          per_page: effective.per_page,
-          sort: effective.sort,
-          adult_content: effective.adult_content,
-          // free-only enforcement:
-          min_price: 0,
-          max_price: 0,
-        };
-        if (effective.keywords) apiParams.keywords = effective.keywords;
-        if (effective.category_id !== undefined)
-          apiParams.category_id = effective.category_id;
-        if (effective.product_type) apiParams.product_type = effective.product_type;
-        if (effective.extensions) apiParams.extensions = effective.extensions;
-        if (effective.polygons) apiParams.polygons = effective.polygons;
-        if (effective.low_poly !== undefined)
-          apiParams.low_poly = effective.low_poly;
-        if (effective.animated !== undefined)
-          apiParams.animated = effective.animated;
-        if (effective.rigged !== undefined) apiParams.rigged = effective.rigged;
-        if (effective.pbr !== undefined) apiParams.pbr = effective.pbr;
-
-        const data = await apiGet<CGTraderModelListResponse>(
-          env,
-          "/models",
-          apiParams,
-        );
 
         // Defensive: drop anything the API returns that isn't actually free.
         const freeModels = (data.models ?? []).filter(isFreeModel);

@@ -9,12 +9,6 @@ export interface CGTraderFile {
   download_url?: string;
 }
 
-export interface CGTraderThumbnail {
-  url?: string;
-  width?: number;
-  height?: number;
-}
-
 export interface CGTraderModel {
   id: number;
   status?: string;
@@ -35,7 +29,7 @@ export interface CGTraderModel {
   prices?: CGTraderPrices;
   files?: CGTraderFile[];
   availableFileExtensions?: string[];
-  thumbnails?: CGTraderThumbnail[];
+  thumbnails?: string[];
   [key: string]: unknown;
 }
 

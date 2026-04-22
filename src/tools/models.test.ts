@@ -80,8 +80,13 @@ beforeEach(() => {
 });
 
 describe("cgtrader_search_models elicitation", () => {
-  it("applies elicited refinements when the user accepts", async () => {
-    vi.mocked(apiGet).mockResolvedValueOnce({ total: 1, models: [FREE_MODEL] });
+  it("re-fetches with narrowed params when the user accepts the refinement", async () => {
+    vi.mocked(apiGet)
+      // First call: broad search returns a multi-page total (> per_page=25),
+      // which triggers the post-search refinement elicit.
+      .mockResolvedValueOnce({ total: 100, models: [FREE_MODEL] })
+      // Second call: re-fetch with the narrowed params.
+      .mockResolvedValueOnce({ total: 3, models: [FREE_MODEL] });
     const captured: unknown[] = [];
     const client = await connectedClient({
       elicitation: true,
@@ -104,14 +109,24 @@ describe("cgtrader_search_models elicitation", () => {
     });
 
     expect(captured).toHaveLength(1);
-    const params = vi.mocked(apiGet).mock.calls[0]![2] as Record<string, unknown>;
-    expect(params.extensions).toBe("blend");
-    expect(params.polygons).toBe("lt_5k");
-    expect(params.sort).toBe("newest");
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(2);
+    const firstParams = vi.mocked(apiGet).mock.calls[0]![2] as Record<
+      string,
+      unknown
+    >;
+    expect(firstParams.extensions).toBeUndefined();
+    expect(firstParams.polygons).toBeUndefined();
+    const narrowedParams = vi.mocked(apiGet).mock.calls[1]![2] as Record<
+      string,
+      unknown
+    >;
+    expect(narrowedParams.extensions).toBe("blend");
+    expect(narrowedParams.polygons).toBe("lt_5k");
+    expect(narrowedParams.sort).toBe("newest");
   });
 
-  it("treats 'any' selections as no filter and keeps defaults", async () => {
-    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+  it("treats 'any' selections as no filter and skips the re-fetch", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 100, models: [FREE_MODEL] });
     const client = await connectedClient({
       elicitation: true,
       responder: async () => ({
@@ -125,14 +140,16 @@ describe("cgtrader_search_models elicitation", () => {
       arguments: { keywords: "chair" },
     });
 
+    // No narrowing happened, so no second API call.
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(1);
     const params = vi.mocked(apiGet).mock.calls[0]![2] as Record<string, unknown>;
     expect(params.extensions).toBeUndefined();
     expect(params.polygons).toBeUndefined();
     expect(params.sort).toBe("best_match");
   });
 
-  it("runs with defaults when the user declines", async () => {
-    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+  it("runs with defaults when the user declines the refinement", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 100, models: [FREE_MODEL] });
     const client = await connectedClient({
       elicitation: true,
       responder: async () => ({ action: "decline" }),
@@ -144,9 +161,24 @@ describe("cgtrader_search_models elicitation", () => {
     });
 
     expect(result.isError).toBeFalsy();
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(1);
     const params = vi.mocked(apiGet).mock.calls[0]![2] as Record<string, unknown>;
     expect(params.extensions).toBeUndefined();
     expect(params.polygons).toBeUndefined();
+  });
+
+  it("does NOT elicit when the result fits on a single page", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 5, models: [FREE_MODEL] });
+    const responder = vi.fn(async () => ({ action: "accept", content: {} }));
+    const client = await connectedClient({ elicitation: true, responder });
+
+    await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(responder).not.toHaveBeenCalled();
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT elicit when the caller already supplied refinement params", async () => {
@@ -178,7 +210,7 @@ describe("cgtrader_search_models elicitation", () => {
   });
 
   it("surfaces user-supplied notes as a hint in the result text", async () => {
-    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 100, models: [FREE_MODEL] });
     const client = await connectedClient({
       elicitation: true,
       responder: async () => ({
@@ -202,7 +234,7 @@ describe("cgtrader_search_models elicitation", () => {
   });
 
   it("ignores empty / whitespace-only notes", async () => {
-    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 100, models: [FREE_MODEL] });
     const client = await connectedClient({
       elicitation: true,
       responder: async () => ({
@@ -220,7 +252,7 @@ describe("cgtrader_search_models elicitation", () => {
   });
 
   it("appends a decline hint when the user declines the refinement", async () => {
-    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 100, models: [FREE_MODEL] });
     const client = await connectedClient({
       elicitation: true,
       responder: async () => ({ action: "decline" }),
@@ -235,7 +267,7 @@ describe("cgtrader_search_models elicitation", () => {
   });
 
   it("does NOT append a decline hint when the user cancels (vs. declines)", async () => {
-    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 100, models: [FREE_MODEL] });
     const client = await connectedClient({
       elicitation: true,
       responder: async () => ({ action: "cancel" }),

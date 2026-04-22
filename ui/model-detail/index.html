@@ -14,63 +14,7 @@
         </button>
       </header>
 
-      <section class="detail" id="detail" hidden>
-        <div class="gallery">
-          <div class="gallery-main">
-            <img id="hero" class="hero" alt="" />
-            <button
-              type="button"
-              class="nav-btn prev"
-              id="hero-prev"
-              aria-label="Previous image"
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              class="nav-btn next"
-              id="hero-next"
-              aria-label="Next image"
-            >
-              ›
-            </button>
-          </div>
-          <div class="thumb-strip" id="thumb-strip"></div>
-        </div>
-
-        <div class="meta">
-          <h1 class="title" id="title"></h1>
-          <div class="author" id="author"></div>
-          <div class="chips" id="chips"></div>
-
-          <dl class="facts" id="facts"></dl>
-
-          <div class="cta-row">
-            <button
-              type="button"
-              class="cta primary"
-              id="download-btn"
-              disabled
-            >
-              Get free download
-            </button>
-            <button type="button" class="cta secondary" id="external-btn">
-              See on CGTrader
-            </button>
-          </div>
-
-          <section class="description" id="description" hidden>
-            <h2>Description</h2>
-            <div class="description-body" id="description-body"></div>
-          </section>
-
-          <section class="downloads" id="downloads" hidden>
-            <h2>Download links</h2>
-            <ul class="download-list" id="download-list"></ul>
-            <p class="hint" id="download-hint"></p>
-          </section>
-        </div>
-      </section>
+      <section id="detail-container" hidden></section>
 
       <div class="loader" id="loader" aria-live="polite" aria-busy="true">
         <div class="spinner" aria-hidden="true"></div>

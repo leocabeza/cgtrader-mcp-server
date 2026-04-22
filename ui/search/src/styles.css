@@ -34,7 +34,8 @@ body {
 }
 
 .fullscreen-btn,
-.pager button {
+.pager button,
+.back-btn {
   background: var(--color-background-secondary, #f3f3f3);
   color: var(--color-text-primary, #111);
   border: 1px solid var(--color-border-primary, #ddd);
@@ -45,7 +46,8 @@ body {
 }
 
 .fullscreen-btn:hover,
-.pager button:not(:disabled):hover {
+.pager button:not(:disabled):hover,
+.back-btn:hover {
   background: var(--color-background-tertiary, #ebebeb);
 }
 
@@ -88,7 +90,8 @@ body {
 }
 
 .card-footer {
-  margin-top: 6px;
+  margin-top: auto;
+  padding-top: 8px;
   display: flex;
   justify-content: flex-end;
 }
@@ -115,6 +118,7 @@ body {
 }
 
 .card-body {
+  flex: 1 1 auto;
   padding: 8px 10px 10px;
   display: flex;
   flex-direction: column;
@@ -184,6 +188,12 @@ body {
   gap: 10px;
   padding: 32px 0;
   color: var(--color-text-secondary, #555);
+}
+
+/* .loader's display:flex has the same specificity as the UA [hidden] rule
+   and wins on source order, so `hidden` alone wouldn't actually hide it. */
+[hidden] {
+  display: none !important;
 }
 
 .app.loading .grid:empty + .loader {

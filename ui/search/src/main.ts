@@ -1,24 +1,13 @@
-import {
-  App,
-  applyDocumentTheme,
-  applyHostFonts,
-  applyHostStyleVariables,
-  type McpUiHostContext,
-} from "@modelcontextprotocol/ext-apps";
+import { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { clearChildren, makeChip, safeHttpUrl } from "../../shared/dom.ts";
+import { applyHostContext } from "../../shared/host-context.ts";
+import {
+  renderModelDetail,
+  type ModelDetailHandle,
+} from "../../shared/model-detail.ts";
+import type { Model, ViewModelResult } from "../../shared/types.ts";
 import "./styles.css";
-
-type Model = {
-  id: number;
-  title?: string;
-  author_name?: string;
-  url?: string;
-  thumbnails?: string[];
-  availableFileExtensions?: string[];
-  animated?: boolean;
-  rigged?: boolean;
-  game_ready?: boolean;
-};
 
 type SearchResult = {
   total?: number;
@@ -37,19 +26,23 @@ const pagerEl = document.getElementById("pager")!;
 const pageLabelEl = document.getElementById("page-label")!;
 const prevBtn = document.getElementById("prev-btn") as HTMLButtonElement;
 const nextBtn = document.getElementById("next-btn") as HTMLButtonElement;
+const backBtn = document.getElementById("back-btn") as HTMLButtonElement;
 const fullscreenBtn = document.getElementById(
   "fullscreen-btn",
 ) as HTMLButtonElement;
 const loaderEl = document.getElementById("loader") as HTMLElement;
+const detailContainerEl = document.getElementById(
+  "detail-container",
+) as HTMLElement;
+
+const loaderLabelEl = loaderEl.querySelector(".loader-label") as HTMLElement;
+const DEFAULT_LOADER_LABEL = loaderLabelEl.textContent ?? "Loading…";
 
 let lastArgs: Record<string, unknown> = {};
 let currentResult: SearchResult | null = null;
 let displayMode: "inline" | "fullscreen" | string = "inline";
-let navigating = false;
-let navigationTimeoutId: number | null = null;
-
-const loaderLabelEl = loaderEl.querySelector(".loader-label") as HTMLElement;
-const DEFAULT_LOADER_LABEL = loaderLabelEl.textContent ?? "Loading…";
+let detailHandle: ModelDetailHandle | null = null;
+let lastSummary = "";
 
 function setLoading(on: boolean, label?: string): void {
   root.classList.toggle("loading", on);
@@ -57,79 +50,8 @@ function setLoading(on: boolean, label?: string): void {
   loaderLabelEl.textContent = on ? label ?? DEFAULT_LOADER_LABEL : DEFAULT_LOADER_LABEL;
 }
 
-function clearNavigation(): void {
-  navigating = false;
-  if (navigationTimeoutId !== null) {
-    window.clearTimeout(navigationTimeoutId);
-    navigationTimeoutId = null;
-  }
-}
-
-function failNavigation(message: string): void {
-  clearNavigation();
-  setLoading(false);
-  summaryEl.textContent = message;
-}
-
 function pickThumb(m: Model): string | undefined {
   return m.thumbnails?.find((t) => typeof t === "string" && t.length > 0);
-}
-
-function safeHttpUrl(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    const u = new URL(value);
-    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
-
-function makeChip(label: string): HTMLElement {
-  const span = document.createElement("span");
-  span.className = "chip";
-  span.textContent = label;
-  return span;
-}
-
-// Safety valve: if the host hasn't torn us down within this window, assume
-// the LLM didn't route the message to the detail tool and let the user retry.
-const NAVIGATION_TIMEOUT_MS = 30_000;
-
-function openDetail(m: Model): void {
-  if (navigating) return;
-  const title = m.title ?? `model ${m.id}`;
-
-  navigating = true;
-  setLoading(true, `Opening "${title}"…`);
-  navigationTimeoutId = window.setTimeout(() => {
-    failNavigation("That took longer than expected — try clicking the model again.");
-  }, NAVIGATION_TIMEOUT_MS);
-
-  // sendMessage resolves when the host acknowledges the message, not when the
-  // LLM finishes its turn — so we don't clear the loader on resolve. The host
-  // will tear this UI down when it swaps to the detail UI; until then we wait,
-  // falling back to the timeout above if nothing happens.
-  app
-    .sendMessage({
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `Open the CGTrader detail view for model id ${m.id} ("${title}") by calling cgtrader_view_model with model_id=${m.id}.`,
-        },
-      ],
-    })
-    .then((res) => {
-      if (res.isError) {
-        failNavigation("The host rejected the request — try again.");
-      }
-    })
-    .catch((e) => {
-      console.error("sendMessage failed", e);
-      failNavigation("Couldn't open detail view — try again.");
-    });
 }
 
 function makeCard(m: Model): HTMLElement {
@@ -203,10 +125,6 @@ function makeCard(m: Model): HTMLElement {
   return card;
 }
 
-function clearChildren(el: Element): void {
-  while (el.firstChild) el.removeChild(el.firstChild);
-}
-
 function render(result: SearchResult): void {
   currentResult = result;
   const models = result.models ?? [];
@@ -218,6 +136,7 @@ function render(result: SearchResult): void {
     models.length === 0
       ? "No results"
       : `${total.toLocaleString()} free models — page ${page}`;
+  lastSummary = summaryEl.textContent;
 
   clearChildren(gridEl);
   if (models.length === 0) {
@@ -258,33 +177,79 @@ async function gotoPage(page: number): Promise<void> {
   }
 }
 
-function handleHostContextChanged(ctx: McpUiHostContext): void {
-  if (ctx.theme) applyDocumentTheme(ctx.theme);
-  if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
-  if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
-  if (ctx.safeAreaInsets) {
-    const { top, right, bottom, left } = ctx.safeAreaInsets;
-    root.style.paddingTop = `${top + 12}px`;
-    root.style.paddingRight = `${right + 12}px`;
-    root.style.paddingBottom = `${bottom + 12}px`;
-    root.style.paddingLeft = `${left + 12}px`;
-  }
-  if (ctx.availableDisplayModes?.includes("fullscreen")) {
-    fullscreenBtn.hidden = false;
-  }
-  if (ctx.displayMode) {
-    displayMode = ctx.displayMode;
-    fullscreenBtn.textContent =
-      displayMode === "fullscreen" ? "Exit fullscreen" : "Fullscreen";
+function showGrid(): void {
+  detailHandle?.destroy();
+  detailHandle = null;
+  clearChildren(detailContainerEl);
+  detailContainerEl.hidden = true;
+
+  gridEl.hidden = false;
+  pagerEl.hidden = !currentResult
+    ? true
+    : !(
+        (currentResult.page ?? 1) > 1 ||
+        currentResult.has_more === true ||
+        (currentResult.next_page ?? null) !== null
+      );
+  backBtn.hidden = true;
+  summaryEl.textContent = lastSummary;
+}
+
+function showDetail(): void {
+  gridEl.hidden = true;
+  pagerEl.hidden = true;
+  detailContainerEl.hidden = false;
+  backBtn.hidden = false;
+}
+
+async function openDetail(m: Model): Promise<void> {
+  const title = m.title ?? `model ${m.id}`;
+  showDetail();
+  clearChildren(detailContainerEl);
+  detailContainerEl.classList.remove("detail");
+  summaryEl.textContent = `Opening "${title}"…`;
+  setLoading(true, `Opening "${title}"…`);
+
+  try {
+    const res = await app.callServerTool({
+      name: "cgtrader_view_model",
+      arguments: { model_id: m.id },
+    });
+    const structured = res.structuredContent as ViewModelResult | undefined;
+    if (!structured?.model) {
+      summaryEl.textContent =
+        res.isError && res.content?.[0]?.type === "text"
+          ? (res.content[0] as { text: string }).text
+          : "Couldn't load model details.";
+      return;
+    }
+    detailHandle = renderModelDetail(detailContainerEl, structured, {
+      callServerTool: (p) => app.callServerTool(p),
+      openLink: (p) => app.openLink(p),
+    });
+    summaryEl.textContent = `Free model · id ${structured.model.id}`;
+  } catch (e) {
+    console.error("cgtrader_view_model failed", e);
+    summaryEl.textContent =
+      e instanceof Error ? e.message : "Couldn't load model details.";
+  } finally {
+    setLoading(false);
   }
 }
 
 const app = new App({ name: "CGTrader Search", version: "0.1.0" });
 
-app.onhostcontextchanged = handleHostContextChanged;
+app.onhostcontextchanged = (ctx) => {
+  applyHostContext(root, ctx, {
+    fullscreenBtn,
+    onDisplayMode: (m) => {
+      displayMode = m;
+    },
+  });
+};
 
 app.ontoolinput = (params) => {
-  clearNavigation();
+  showGrid();
   lastArgs = { ...(params.arguments as Record<string, unknown>) };
   summaryEl.textContent = "Searching CGTrader…";
   clearChildren(gridEl);
@@ -292,7 +257,6 @@ app.ontoolinput = (params) => {
 };
 
 app.ontoolresult = (result: CallToolResult) => {
-  clearNavigation();
   setLoading(false);
   const structured = result.structuredContent as SearchResult | undefined;
   if (structured) {
@@ -315,6 +279,7 @@ nextBtn.addEventListener("click", () => {
   const next = currentResult?.next_page ?? (currentResult?.page ?? 1) + 1;
   void gotoPage(next);
 });
+backBtn.addEventListener("click", () => showGrid());
 fullscreenBtn.addEventListener("click", async () => {
   const target = displayMode === "fullscreen" ? "inline" : "fullscreen";
   try {
@@ -329,5 +294,12 @@ fullscreenBtn.addEventListener("click", async () => {
 
 app.connect().then(() => {
   const ctx = app.getHostContext();
-  if (ctx) handleHostContextChanged(ctx);
+  if (ctx) {
+    applyHostContext(root, ctx, {
+      fullscreenBtn,
+      onDisplayMode: (m) => {
+        displayMode = m;
+      },
+    });
+  }
 });

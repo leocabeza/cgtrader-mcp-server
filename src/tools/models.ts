@@ -1,4 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  RESOURCE_MIME_TYPE,
+  registerAppResource,
+  registerAppTool,
+} from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import type { Env } from "../env.js";
 import {
@@ -22,6 +27,41 @@ import {
   perPageField,
   responseFormatField,
 } from "../schemas/common.js";
+import searchUiHtml from "../../ui/search/dist/index.html";
+
+const SEARCH_UI_RESOURCE_URI = "ui://cgtrader/search.html";
+
+// CGTrader serves model thumbnails from img-new.cgtrader.com (confirmed
+// 2026-04-22). The wildcard covers sibling subdomains in case the CDN host
+// rotates; tighten to the specific host if CSP exposure becomes a concern.
+const SEARCH_UI_IMG_DOMAINS = ["https://*.cgtrader.com"];
+
+function registerSearchUiResource(server: McpServer) {
+  registerAppResource(
+    server,
+    "CGTrader Search",
+    SEARCH_UI_RESOURCE_URI,
+    {
+      description: "Interactive grid UI for free CGTrader model search.",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: SEARCH_UI_RESOURCE_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: searchUiHtml,
+          _meta: {
+            ui: {
+              csp: {
+                resourceDomains: SEARCH_UI_IMG_DOMAINS,
+              },
+            },
+          },
+        },
+      ],
+    }),
+  );
+}
 
 // ─── search_models ───────────────────────────────────────────────────────────
 
@@ -158,10 +198,12 @@ const DECLINE_HINT =
   "> **User declined the refinement prompt.** If they seem unsatisfied with the results below, re-prompt them in natural language to describe what they actually want.";
 
 function registerSearchModels(server: McpServer, env: Env) {
-  server.registerTool(
+  registerAppTool(
+    server,
     "cgtrader_search_models",
     {
       title: "Search free CGTrader models",
+      _meta: { ui: { resourceUri: SEARCH_UI_RESOURCE_URI } },
       description: `Search the CGTrader marketplace for FREE 3D models (price = 0).
 
 This server only exposes free content; the price filter is enforced server-side (max_price=0) and cannot be overridden.
@@ -887,6 +929,7 @@ Returns:
 }
 
 export function registerModelTools(server: McpServer, env: Env) {
+  registerSearchUiResource(server);
   registerSearchModels(server, env);
   registerGetModel(server, env);
   registerGetModelImages(server, env);

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CGTrader — Free model search</title>
+  </head>
+  <body>
+    <main class="app" id="app">
+      <header class="toolbar">
+        <div class="summary" id="summary">Waiting for results…</div>
+        <button type="button" class="fullscreen-btn" id="fullscreen-btn" hidden>
+          Fullscreen
+        </button>
+      </header>
+      <section class="grid" id="grid"></section>
+      <footer class="pager" id="pager" hidden>
+        <button type="button" id="prev-btn" disabled>← Prev</button>
+        <span class="page-label" id="page-label"></span>
+        <button type="button" id="next-btn" disabled>Next →</button>
+      </footer>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

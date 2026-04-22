@@ -6,6 +6,13 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/ui/**/dist/*.html"],
+			"fallthrough": true
+		}
+	],
 	"durable_objects": {
 		"bindings": [
 			{

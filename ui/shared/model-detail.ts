@@ -19,19 +19,19 @@ const VIEWER_EXTENSIONS: ReadonlySet<string> = new Set([
   "gltf",
 ]);
 
+// Only file-name extensions count: CGTrader listings routinely advertise
+// `availableFileExtensions` (glb/fbx/obj/…) that live inside a single `.rar`
+// the free-downloads endpoint ships, and the server's preview picker
+// (selectPreviewCandidates in src/tools/models.ts) keys off file names too.
+// Using declared extensions here would enable the CTA for archives the
+// in-browser viewer can't open.
 function hasPreviewableExtension(model: Model): boolean {
-  const declared = model.availableFileExtensions;
-  const exts =
-    declared && declared.length > 0
-      ? declared
-      : (model.files ?? [])
-          .map((f) => {
-            const name = f.name ?? "";
-            const idx = name.lastIndexOf(".");
-            return idx > 0 ? name.slice(idx + 1) : "";
-          })
-          .filter(Boolean);
-  return exts.some((e) => VIEWER_EXTENSIONS.has(e.toLowerCase()));
+  return (model.files ?? []).some((f) => {
+    const name = f.name ?? "";
+    const idx = name.lastIndexOf(".");
+    if (idx <= 0) return false;
+    return VIEWER_EXTENSIONS.has(name.slice(idx + 1).toLowerCase());
+  });
 }
 
 /** Disposer callback returned by a preview mount. */

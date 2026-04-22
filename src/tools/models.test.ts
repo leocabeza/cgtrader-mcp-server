@@ -26,8 +26,22 @@ vi.mock("../services/url-resolver.js", async () => {
       this.name = "UrlResolutionError";
     }
   }
+  const resolveModelIdFromUrl = vi.fn();
+  const resolveModelId = vi.fn(
+    async (input: { model_id?: number; url?: string }) => {
+      const gotId = input.model_id !== undefined;
+      const gotUrl = input.url !== undefined;
+      if (gotId === gotUrl) {
+        throw new UrlResolutionError(
+          "Provide exactly one of `model_id` or `url`.",
+        );
+      }
+      return gotId ? input.model_id! : resolveModelIdFromUrl(input.url!);
+    },
+  );
   return {
-    resolveModelIdFromUrl: vi.fn(),
+    resolveModelIdFromUrl,
+    resolveModelId,
     UrlResolutionError,
   };
 });

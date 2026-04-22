@@ -20,6 +20,10 @@ const LD_JSON_RE = /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([
 // images are emitted first in the HTML. Used only if JSON-LD parsing fails.
 const ITEMS_ID_RE = /img-new\.cgtrader\.com\/items\/(\d+)\//;
 
+// `/items/{id}` (with optional trailing segments like `/download-page`) carries
+// the model id directly in the path — no HTML fetch needed.
+const ITEMS_PATH_RE = /^\/items\/(\d+)(?:\/|$)/;
+
 /**
  * Resolves a CGTrader product page URL to its numeric model id.
  *
@@ -42,6 +46,12 @@ export async function resolveModelIdFromUrl(rawUrl: string): Promise<number> {
     throw new UrlResolutionError(
       `URL host must be cgtrader.com; got ${parsed.hostname}`,
     );
+  }
+
+  const pathMatch = parsed.pathname.match(ITEMS_PATH_RE);
+  if (pathMatch) {
+    const id = Number.parseInt(pathMatch[1]!, 10);
+    if (Number.isFinite(id) && id > 0) return id;
   }
 
   const controller = new AbortController();
@@ -99,6 +109,24 @@ export async function resolveModelIdFromUrl(rawUrl: string): Promise<number> {
   throw new UrlResolutionError(
     `Could not locate a model id in ${parsed.toString()} — page structure may have changed.`,
   );
+}
+
+/**
+ * Resolves a model id from a `{ model_id?, url? }` input, enforcing that
+ * exactly one is provided. Shared by every tool that accepts either form.
+ */
+export async function resolveModelId(input: {
+  model_id?: number;
+  url?: string;
+}): Promise<number> {
+  const gotId = input.model_id !== undefined;
+  const gotUrl = input.url !== undefined;
+  if (gotId === gotUrl) {
+    throw new UrlResolutionError(
+      "Provide exactly one of `model_id` or `url`.",
+    );
+  }
+  return gotId ? input.model_id! : resolveModelIdFromUrl(input.url!);
 }
 
 function extractSku(ld: unknown): number | null {

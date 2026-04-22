@@ -22,7 +22,7 @@ import {
 import { modelsToMarkdown, renderText } from "../services/format.js";
 import {
   UrlResolutionError,
-  resolveModelIdFromUrl,
+  resolveModelId,
 } from "../services/url-resolver.js";
 import {
   categoryIdField,
@@ -31,6 +31,13 @@ import {
   perPageField,
   responseFormatField,
 } from "../schemas/common.js";
+
+const modelUrlField = z
+  .string()
+  .url()
+  .describe(
+    "CGTrader URL — either a product page (https://www.cgtrader.com/free-3d-models/...) or a download page (https://www.cgtrader.com/items/{id}/download-page). Use this OR model_id.",
+  );
 import searchUiHtml from "../../ui/search/dist/index.html";
 import modelDetailUiHtml from "../../ui/model-detail/dist/index.html";
 import modelPreviewUiHtml from "../../ui/model-preview/dist/index.html";
@@ -470,7 +477,8 @@ Example:
 
 const GetModelInputSchema = z
   .object({
-    model_id: modelIdField,
+    model_id: modelIdField.optional(),
+    url: modelUrlField.optional(),
     response_format: responseFormatField,
   })
   .strict();
@@ -539,14 +547,17 @@ function registerGetModel(server: McpServer, env: Env) {
     "cgtrader_get_model",
     {
       title: "Get free CGTrader model details",
-      description: `Fetch full details for a single CGTrader model by id.
+      description: `Fetch full details for a single CGTrader model.
 
-Rejects with an error if the model is not free (download price > 0). Use cgtrader_search_models to find free model ids first.
+Accepts either a numeric model_id or a CGTrader URL (product page or /items/{id}/download-page). Provide exactly one.
+
+Rejects with an error if the model is not free (download price > 0). Use cgtrader_search_models to find free models first.
 
 On hosts that support MCP elicitation, this tool may ask the user a quick follow-up ("images / license / downloads / done"); the chosen action is surfaced as a hint so the agent can call the next tool immediately.
 
 Args:
-  - model_id (number, required): CGTrader model id.
+  - model_id (number, optional): CGTrader model id.
+  - url (string, optional): CGTrader product page or /items/{id}/download-page URL.
   - response_format ('markdown' | 'json', default 'markdown').
 
 Returns: the full model object (id, title, author_name, url, category_id, subcategory_id, description, tags, prices, files, availableFileExtensions, thumbnails, animated, rigged, game_ready, license, ...).`,
@@ -560,7 +571,11 @@ Returns: the full model object (id, title, author_name, url, category_id, subcat
     },
     async (params: GetModelInput) => {
       try {
-        const model = await fetchFreeModelOrThrow(env, params.model_id);
+        const modelId = await resolveModelId({
+          model_id: params.model_id,
+          url: params.url,
+        });
+        const model = await fetchFreeModelOrThrow(env, modelId);
         const baseMd = modelToMarkdown(model);
 
         const outcome = await elicitForm<{ next?: string; notes?: string }>(
@@ -616,6 +631,12 @@ Returns: the full model object (id, title, author_name, url, category_id, subcat
             isError: true,
           };
         }
+        if (error instanceof UrlResolutionError) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
         return {
           content: [{ type: "text", text: handleApiError(error) }],
           isError: true,
@@ -629,7 +650,8 @@ Returns: the full model object (id, title, author_name, url, category_id, subcat
 
 const ViewModelInputSchema = z
   .object({
-    model_id: modelIdField,
+    model_id: modelIdField.optional(),
+    url: modelUrlField.optional(),
   })
   .strict();
 
@@ -646,10 +668,13 @@ function registerViewModel(server: McpServer, env: Env) {
 
 This tool is optimized for the Model Detail UI: it fetches the model and its preview images in one call and returns them together as structured content. Prefer cgtrader_get_model for plain-text/markdown summaries with follow-up elicitation.
 
+Accepts either a numeric model_id or a CGTrader URL (product page or /items/{id}/download-page). Provide exactly one.
+
 Rejects with an error if the model is not free.
 
 Args:
-  - model_id (number, required): CGTrader model id.
+  - model_id (number, optional): CGTrader model id.
+  - url (string, optional): CGTrader product page or /items/{id}/download-page URL.
 
 Returns: { model, images } — the full model object plus an array of preview images.`,
       inputSchema: ViewModelInputSchema.shape,
@@ -662,13 +687,17 @@ Returns: { model, images } — the full model object plus an array of preview im
     },
     async (params: ViewModelInput) => {
       try {
+        const modelId = await resolveModelId({
+          model_id: params.model_id,
+          url: params.url,
+        });
         // Fetch model (with free-guard) and images in parallel. Images can
         // legitimately 404 or come back empty — don't fail the whole view
         // over it; the gallery falls back to model.thumbnails.
-        const modelP = fetchFreeModelOrThrow(env, params.model_id);
+        const modelP = fetchFreeModelOrThrow(env, modelId);
         const imagesP = apiGet<{ images?: CGTraderImage[] } | CGTraderImage[]>(
           env,
-          `/models/${params.model_id}/images`,
+          `/models/${modelId}/images`,
         ).catch(() => [] as CGTraderImage[]);
         const [model, imagesRaw] = await Promise.all([modelP, imagesP]);
         const images: CGTraderImage[] = Array.isArray(imagesRaw)
@@ -686,6 +715,12 @@ Returns: { model, images } — the full model object plus an array of preview im
         };
       } catch (error) {
         if (error instanceof FreeOnlyViolation) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+        if (error instanceof UrlResolutionError) {
           return {
             content: [{ type: "text", text: `Error: ${error.message}` }],
             isError: true,
@@ -884,7 +919,8 @@ function fileExtension(name: string | undefined): string | null {
 
 const DownloadFreeFileInputSchema = z
   .object({
-    model_id: modelIdField,
+    model_id: modelIdField.optional(),
+    url: modelUrlField.optional(),
     file_id: z
       .number()
       .int()
@@ -904,10 +940,13 @@ function registerDownloadFreeFile(server: McpServer, env: Env) {
 
 When the user wants to download a model with multiple files, prefer cgtrader_get_free_model_download_urls — it returns every file's URL in a single call instead of one call per file.
 
+Accepts either a numeric model_id or a CGTrader URL (product page or /items/{id}/download-page) to identify the parent model. Provide exactly one.
+
 This tool NEVER streams the binary through MCP. It returns a short-lived S3 signed URL meant for the end user's browser. ${AGENT_HANDOFF_NOTE}
 
 Args:
-  - model_id (number, required): Parent model id. Rejected if not free.
+  - model_id (number, optional): Parent model id. Rejected if not free.
+  - url (string, optional): CGTrader product page or /items/{id}/download-page URL.
   - file_id (number, required): File id (from model.files[].id in cgtrader_get_model).
 
 Returns: { model_id, file_id, download_url, expires_hint }.`,
@@ -921,26 +960,30 @@ Returns: { model_id, file_id, download_url, expires_hint }.`,
     },
     async (params: DownloadFreeFileInput) => {
       try {
-        const model = await fetchFreeModelOrThrow(env, params.model_id);
+        const modelId = await resolveModelId({
+          model_id: params.model_id,
+          url: params.url,
+        });
+        const model = await fetchFreeModelOrThrow(env, modelId);
         const fileBelongs = model.files?.some((f) => f.id === params.file_id);
         if (model.files && !fileBelongs) {
           return {
             content: [
               {
                 type: "text",
-                text: `Error: file_id ${params.file_id} does not belong to model ${params.model_id}. Known file ids: ${model.files.map((f) => f.id).join(", ") || "(none)"}.`,
+                text: `Error: file_id ${params.file_id} does not belong to model ${modelId}. Known file ids: ${model.files.map((f) => f.id).join(", ") || "(none)"}.`,
               },
             ],
             isError: true,
           };
         }
 
-        const url = await resolveSignedUrl(env, params.model_id, params.file_id);
+        const url = await resolveSignedUrl(env, modelId, params.file_id);
         const file = model.files?.find((f) => f.id === params.file_id);
         const label = file ? fileLabel(file) : `file ${params.file_id}`;
 
         const structured = {
-          model_id: params.model_id,
+          model_id: modelId,
           file_id: params.file_id,
           name: file?.name,
           download_url: url,
@@ -967,6 +1010,12 @@ Returns: { model_id, file_id, download_url, expires_hint }.`,
             isError: true,
           };
         }
+        if (error instanceof UrlResolutionError) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
         return {
           content: [{ type: "text", text: handleApiError(error) }],
           isError: true,
@@ -980,7 +1029,8 @@ Returns: { model_id, file_id, download_url, expires_hint }.`,
 
 const GetFreeModelDownloadUrlsInputSchema = z
   .object({
-    model_id: modelIdField,
+    model_id: modelIdField.optional(),
+    url: modelUrlField.optional(),
   })
   .strict();
 
@@ -997,10 +1047,13 @@ function registerGetFreeModelDownloadUrls(server: McpServer, env: Env) {
 
 Prefer this tool over cgtrader_download_free_file whenever the user wants to download a model (they almost always want all the files). It runs the per-file redirect fetches in parallel server-side, so the agent makes ONE tool call instead of N.
 
+Accepts either a numeric model_id or a CGTrader URL (product page or /items/{id}/download-page). Provide exactly one.
+
 This tool NEVER streams binaries through MCP. ${AGENT_HANDOFF_NOTE}
 
 Args:
-  - model_id (number, required): Rejected if model is not free.
+  - model_id (number, optional): Rejected if model is not free.
+  - url (string, optional): CGTrader product page or /items/{id}/download-page URL.
 
 Returns:
   {
@@ -1019,18 +1072,22 @@ Returns:
     },
     async (params: GetFreeModelDownloadUrlsInput) => {
       try {
-        const model = await fetchFreeModelOrThrow(env, params.model_id);
+        const modelId = await resolveModelId({
+          model_id: params.model_id,
+          url: params.url,
+        });
+        const model = await fetchFreeModelOrThrow(env, modelId);
         const files = model.files ?? [];
         if (files.length === 0) {
           return {
             content: [
               {
                 type: "text",
-                text: `Model ${params.model_id} has no downloadable files listed.`,
+                text: `Model ${modelId} has no downloadable files listed.`,
               },
             ],
             structuredContent: {
-              model_id: params.model_id,
+              model_id: modelId,
               model_title: model.title,
               count: 0,
               files: [],
@@ -1041,7 +1098,7 @@ Returns:
         const results = await Promise.all(
           files.map(async (f) => {
             try {
-              const url = await resolveSignedUrl(env, params.model_id, f.id);
+              const url = await resolveSignedUrl(env, modelId, f.id);
               return {
                 file_id: f.id,
                 name: f.name,
@@ -1063,7 +1120,7 @@ Returns:
         );
 
         const structured = {
-          model_id: params.model_id,
+          model_id: modelId,
           model_title: model.title,
           count: results.length,
           files: results,
@@ -1071,7 +1128,7 @@ Returns:
           agent_note: AGENT_HANDOFF_NOTE,
         };
 
-        const title = model.title ?? `model ${params.model_id}`;
+        const title = model.title ?? `model ${modelId}`;
         const lines: string[] = [];
         lines.push(`# Download links — ${title}`);
         lines.push("");
@@ -1099,6 +1156,12 @@ Returns:
             isError: true,
           };
         }
+        if (error instanceof UrlResolutionError) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
         return {
           content: [{ type: "text", text: handleApiError(error) }],
           isError: true,
@@ -1110,27 +1173,12 @@ Returns:
 
 // ─── preview_model_3d (UI + URL→id resolution) ───────────────────────────────
 
-// The raw object schema (used for `.shape` on the tool's inputSchema) and the
-// refined version (used for actual parsing so we can enforce the XOR between
-// model_id and url). `.refine()` returns a ZodEffects which doesn't expose
-// `.shape`, so we keep both.
-const PreviewModelInputBase = z
+const PreviewModelInputSchema = z
   .object({
     model_id: modelIdField.optional(),
-    url: z
-      .string()
-      .url()
-      .optional()
-      .describe(
-        "CGTrader product page URL (e.g. https://www.cgtrader.com/free-3d-models/...). Use this OR model_id.",
-      ),
+    url: modelUrlField.optional(),
   })
   .strict();
-
-const PreviewModelInputSchema = PreviewModelInputBase.refine(
-  (v) => (v.model_id === undefined) !== (v.url === undefined),
-  { message: "Provide exactly one of `model_id` or `url`." },
-);
 
 type PreviewModelInput = z.infer<typeof PreviewModelInputSchema>;
 
@@ -1197,7 +1245,7 @@ function registerPreviewModel3d(server: McpServer, env: Env) {
       _meta: { ui: { resourceUri: MODEL_PREVIEW_UI_RESOURCE_URI } },
       description: `Open an interactive 3D preview of a FREE CGTrader model, rendered in the host with @cgtrader/cgt-viewer (WebGPU/WebGL).
 
-Accepts either a numeric model_id OR a CGTrader product page URL. Resolves the URL to an id by scraping the page's JSON-LD Product.sku (fallback: items/{id} path in image srcs).
+Accepts either a numeric model_id OR a CGTrader URL (product page, e.g. /free-3d-models/..., or /items/{id}/download-page). Product-page URLs resolve via JSON-LD Product.sku scraping; /items/{id} URLs read the id from the path.
 
 Supported render formats: glb, fbx, obj, stl, gltf. The tool auto-picks the first available file in that preference order; the UI lets the user switch among candidates. Models that ship only in non-web formats (.blend, .max, .3ds, …) are returned with picked=null and a list of unsupported_extensions so the UI can explain the gap.
 
@@ -1205,11 +1253,11 @@ Rejects if the model is not free.
 
 Args:
   - model_id (number, optional): Numeric CGTrader model id.
-  - url (string, optional): CGTrader product page URL.
+  - url (string, optional): CGTrader product page or /items/{id}/download-page URL.
   (Provide exactly one.)
 
 Returns: { model_id, model_title, model_url, picked: { file_id, name, extension, download_url, expires_hint } | null, candidates: [{ file_id, name, extension }], unsupported_extensions: [string] }.`,
-      inputSchema: PreviewModelInputBase.shape,
+      inputSchema: PreviewModelInputSchema.shape,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -1219,26 +1267,10 @@ Returns: { model_id, model_title, model_url, picked: { file_id, name, extension,
     },
     async (params: PreviewModelInput) => {
       try {
-        // The tool's inputSchema uses the unrefined object so MCP validators
-        // accept partial inputs; we enforce the XOR between `model_id` and
-        // `url` here.
-        const gotId = params.model_id !== undefined;
-        const gotUrl = params.url !== undefined;
-        if (gotId === gotUrl) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Error: Provide exactly one of `model_id` or `url`.",
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const modelId: number = gotId
-          ? params.model_id!
-          : await resolveModelIdFromUrl(params.url!);
+        const modelId = await resolveModelId({
+          model_id: params.model_id,
+          url: params.url,
+        });
 
         const model = await fetchFreeModelOrThrow(env, modelId);
         const { candidates, unsupported } = selectPreviewCandidates(

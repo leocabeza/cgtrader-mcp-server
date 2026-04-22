@@ -20,7 +20,17 @@ const VIEWER_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 function hasPreviewableExtension(model: Model): boolean {
-  const exts = model.availableFileExtensions ?? [];
+  const declared = model.availableFileExtensions;
+  const exts =
+    declared && declared.length > 0
+      ? declared
+      : (model.files ?? [])
+          .map((f) => {
+            const name = f.name ?? "";
+            const idx = name.lastIndexOf(".");
+            return idx > 0 ? name.slice(idx + 1) : "";
+          })
+          .filter(Boolean);
   return exts.some((e) => VIEWER_EXTENSIONS.has(e.toLowerCase()));
 }
 

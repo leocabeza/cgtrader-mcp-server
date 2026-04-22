@@ -40,10 +40,16 @@ const nextBtn = document.getElementById("next-btn") as HTMLButtonElement;
 const fullscreenBtn = document.getElementById(
   "fullscreen-btn",
 ) as HTMLButtonElement;
+const loaderEl = document.getElementById("loader") as HTMLElement;
 
 let lastArgs: Record<string, unknown> = {};
 let currentResult: SearchResult | null = null;
 let displayMode: "inline" | "fullscreen" | string = "inline";
+
+function setLoading(on: boolean): void {
+  root.classList.toggle("loading", on);
+  loaderEl.hidden = !on;
+}
 
 function pickThumb(m: Model): string | undefined {
   return m.thumbnails?.find((t) => typeof t === "string" && t.length > 0);
@@ -161,7 +167,7 @@ function render(result: SearchResult): void {
 }
 
 async function gotoPage(page: number): Promise<void> {
-  root.classList.add("loading");
+  setLoading(true);
   try {
     const result = await app.callServerTool({
       name: "cgtrader_search_models",
@@ -175,7 +181,7 @@ async function gotoPage(page: number): Promise<void> {
   } catch (e) {
     console.error("pagination failed", e);
   } finally {
-    root.classList.remove("loading");
+    setLoading(false);
   }
 }
 
@@ -208,9 +214,11 @@ app.ontoolinput = (params) => {
   lastArgs = { ...(params.arguments as Record<string, unknown>) };
   summaryEl.textContent = "Searching CGTrader…";
   clearChildren(gridEl);
+  setLoading(true);
 };
 
 app.ontoolresult = (result: CallToolResult) => {
+  setLoading(false);
   const structured = result.structuredContent as SearchResult | undefined;
   if (structured) {
     render(structured);
@@ -219,7 +227,10 @@ app.ontoolresult = (result: CallToolResult) => {
   }
 };
 
-app.onerror = console.error;
+app.onerror = (e) => {
+  setLoading(false);
+  console.error(e);
+};
 
 prevBtn.addEventListener("click", () => {
   const page = currentResult?.page ?? 1;

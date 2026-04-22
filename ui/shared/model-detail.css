@@ -310,3 +310,52 @@
   color: var(--color-text-secondary, #777);
   margin: 6px 0 0;
 }
+
+/* Skeletons — rendered while a pending seed render waits for the full
+   view_model response. The shimmer animation is deliberately slow so it reads
+   as "loading," not attention-seeking. */
+@keyframes detail-skeleton-shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.detail .skeleton-line,
+.detail .gallery-main.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-background-tertiary, #eee) 25%,
+    var(--color-background-secondary, #f5f5f5) 50%,
+    var(--color-background-tertiary, #eee) 75%
+  );
+  background-size: 400px 100%;
+  animation: detail-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.detail .skeleton-line {
+  display: block;
+  height: 12px;
+  border-radius: var(--border-radius-sm, 4px);
+  margin-bottom: 8px;
+}
+
+.detail .description-body .skeleton-line:last-child {
+  width: 65%;
+  margin-bottom: 0;
+}
+
+.detail .skeleton-fact {
+  display: inline-block;
+  width: 90px;
+  height: 10px;
+  margin-bottom: 0;
+  vertical-align: middle;
+}
+
+.detail .cta.loading {
+  opacity: 0.6;
+  cursor: wait;
+}

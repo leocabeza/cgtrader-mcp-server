@@ -86,7 +86,8 @@ function registerSearchUiResource(server: McpServer) {
           _meta: {
             ui: {
               csp: {
-                resourceDomains: CGTRADER_IMG_DOMAINS,
+                resourceDomains: [...CGTRADER_IMG_DOMAINS, DRACO_CDN_DOMAIN],
+                connectDomains: [CGTRADER_S3_DOMAIN, DRACO_CDN_DOMAIN],
               },
             },
           },

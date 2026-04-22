@@ -1,11 +1,13 @@
 import { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { SupportedFormat } from "@cgtrader/cgt-viewer";
 import { clearChildren, makeChip, safeHttpUrl } from "../../shared/dom.ts";
 import { applyHostContext } from "../../shared/host-context.ts";
 import {
   renderModelDetail,
   type ModelDetailHandle,
 } from "../../shared/model-detail.ts";
+import { mountPreview } from "../../shared/preview.ts";
 import type { Model, ViewModelResult } from "../../shared/types.ts";
 import "./styles.css";
 
@@ -225,6 +227,17 @@ async function openDetail(m: Model): Promise<void> {
     detailHandle = renderModelDetail(detailContainerEl, structured, {
       callServerTool: (p) => app.callServerTool(p),
       openLink: (p) => app.openLink(p),
+      mountPreview: async ({ container, data, onStatus }) => {
+        if (!data.picked) throw new Error("No preview candidate.");
+        const mounted = await mountPreview({
+          container,
+          url: data.picked.download_url,
+          format: data.picked.extension as SupportedFormat,
+          name: data.picked.name,
+          onStatus,
+        });
+        return () => mounted.dispose();
+      },
     });
     summaryEl.textContent = `Free model · id ${structured.model.id}`;
   } catch (e) {

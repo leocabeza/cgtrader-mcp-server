@@ -4,15 +4,53 @@ import type {
   DownloadResult,
   Image,
   Model,
+  PreviewResult,
   ViewModelResult,
 } from "./types.ts";
 import "./model-detail.css";
+
+// Formats @cgtrader/cgt-viewer can render in-browser. Must mirror
+// VIEWER_PREFERRED_EXTENSIONS in src/tools/models.ts.
+const VIEWER_EXTENSIONS: ReadonlySet<string> = new Set([
+  "glb",
+  "fbx",
+  "obj",
+  "stl",
+  "gltf",
+]);
+
+function hasPreviewableExtension(model: Model): boolean {
+  const exts = model.availableFileExtensions ?? [];
+  return exts.some((e) => VIEWER_EXTENSIONS.has(e.toLowerCase()));
+}
+
+/** Disposer callback returned by a preview mount. */
+export type PreviewDisposer = () => void;
+
+/**
+ * Callback that mounts a 3D preview inside the supplied container and returns
+ * a disposer. Kept as a dep (rather than importing mountPreview directly)
+ * so bundles that embed model-detail without the viewer — e.g. the search
+ * grid — don't pay the three.js cost.
+ */
+export type PreviewMounter = (args: {
+  container: HTMLElement;
+  data: PreviewResult;
+  onStatus: (msg: string) => void;
+}) => Promise<PreviewDisposer>;
 
 export type ModelDetailDeps = {
   callServerTool: (
     params: CallToolRequest["params"],
   ) => Promise<CallToolResult>;
   openLink: (params: { url: string }) => Promise<unknown>;
+  /**
+   * Optional. When supplied, the detail view shows a "See preview" CTA that
+   * mounts an inline 3D viewer via this callback. Omit to hide the CTA —
+   * useful for bundles that embed model-detail but don't want the viewer's
+   * byte cost (e.g. the search grid).
+   */
+  mountPreview?: PreviewMounter;
 };
 
 export type ModelDetailHandle = {
@@ -177,6 +215,22 @@ export function renderModelDetail(
   downloadBtn.disabled = !(model.files && model.files.length > 0);
   ctaRow.appendChild(downloadBtn);
 
+  const previewBtn = document.createElement("button");
+  previewBtn.type = "button";
+  previewBtn.className = "cta secondary";
+  previewBtn.textContent = "See preview";
+  const canPreview = hasPreviewableExtension(model) && !!deps.mountPreview;
+  previewBtn.disabled = !canPreview;
+  if (!deps.mountPreview) {
+    // Host bundle opted out of the viewer (e.g. the search grid keeps its
+    // bundle lean). Hide the CTA entirely rather than showing a dead button.
+    previewBtn.hidden = true;
+  } else if (!canPreview) {
+    previewBtn.title =
+      "No web-viewable file on this model (needs glb, fbx, obj, stl, or gltf).";
+  }
+  ctaRow.appendChild(previewBtn);
+
   const externalBtn = document.createElement("button");
   externalBtn.type = "button";
   externalBtn.className = "cta secondary";
@@ -184,6 +238,30 @@ export function renderModelDetail(
   ctaRow.appendChild(externalBtn);
 
   meta.appendChild(ctaRow);
+
+  // ── preview panel (hidden until user clicks "See preview") ────────────
+  const previewSection = document.createElement("section");
+  previewSection.className = "preview-panel";
+  previewSection.hidden = true;
+  const previewHeader = document.createElement("div");
+  previewHeader.className = "preview-header";
+  const previewTitle = document.createElement("div");
+  previewTitle.className = "preview-title";
+  previewTitle.textContent = "3D preview";
+  const previewStatus = document.createElement("div");
+  previewStatus.className = "preview-status";
+  const previewBackBtn = document.createElement("button");
+  previewBackBtn.type = "button";
+  previewBackBtn.className = "cta secondary";
+  previewBackBtn.textContent = "Close preview";
+  previewHeader.appendChild(previewTitle);
+  previewHeader.appendChild(previewStatus);
+  previewHeader.appendChild(previewBackBtn);
+  const previewStage = document.createElement("div");
+  previewStage.className = "preview-stage";
+  previewSection.appendChild(previewHeader);
+  previewSection.appendChild(previewStage);
+  meta.appendChild(previewSection);
 
   // ── description (optional) ────────────────────────────────────────────
   const descText = model.description ? htmlToPlainText(model.description) : "";
@@ -285,12 +363,75 @@ export function renderModelDetail(
   };
   downloadBtn.addEventListener("click", onDownload);
 
+  // ── preview CTA handler ───────────────────────────────────────────────
+  let previewDisposer: PreviewDisposer | null = null;
+  const mountPreview = deps.mountPreview;
+
+  const closePreview = (): void => {
+    previewDisposer?.();
+    previewDisposer = null;
+    clearChildren(previewStage);
+    previewStatus.textContent = "";
+    previewSection.hidden = true;
+    previewBtn.disabled = !canPreview;
+    previewBtn.textContent = "See preview";
+  };
+
+  const onPreview = async (): Promise<void> => {
+    if (!mountPreview) return;
+    previewBtn.disabled = true;
+    previewBtn.textContent = "Loading preview…";
+    previewSection.hidden = false;
+    previewStatus.textContent = "Resolving preview URL…";
+    clearChildren(previewStage);
+    try {
+      const res = await deps.callServerTool({
+        name: "cgtrader_preview_model_3d",
+        arguments: { model_id: model.id },
+      });
+      const payload = res.structuredContent as PreviewResult | undefined;
+      if (!payload || !payload.picked) {
+        const ext = payload?.unsupported_extensions ?? [];
+        previewStatus.textContent =
+          ext.length > 0
+            ? `No web preview — ships as ${ext.join(", ")}.`
+            : "No web-viewable file on this model.";
+        previewBtn.disabled = !canPreview;
+        previewBtn.textContent = "See preview";
+        return;
+      }
+      previewStatus.textContent = "Booting viewer…";
+      previewDisposer?.();
+      previewDisposer = await mountPreview({
+        container: previewStage,
+        data: payload,
+        onStatus: (msg) => {
+          previewStatus.textContent = msg;
+        },
+      });
+      previewBtn.textContent = "Reload preview";
+      previewBtn.disabled = false;
+    } catch (e) {
+      console.error("preview failed", e);
+      previewStatus.textContent =
+        e instanceof Error ? e.message : "Failed to load preview.";
+      previewBtn.disabled = !canPreview;
+      previewBtn.textContent = "See preview";
+    }
+  };
+  previewBtn.addEventListener("click", onPreview);
+  previewBackBtn.addEventListener("click", closePreview);
+
   return {
     destroy() {
       prevBtn.removeEventListener("click", onPrev);
       nextBtn.removeEventListener("click", onNext);
       externalBtn.removeEventListener("click", onExternal);
       downloadBtn.removeEventListener("click", onDownload);
+      previewBtn.removeEventListener("click", onPreview);
+      previewBackBtn.removeEventListener("click", closePreview);
+      previewDisposer?.();
+      previewDisposer = null;
     },
   };
 }

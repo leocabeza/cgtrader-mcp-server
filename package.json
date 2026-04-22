@@ -7,9 +7,10 @@
   "scripts": {
     "dev": "pnpm build:ui && wrangler dev",
     "deploy": "pnpm build:ui && wrangler deploy",
-    "build:ui": "pnpm build:ui:search && pnpm build:ui:model_detail",
+    "build:ui": "pnpm build:ui:search && pnpm build:ui:model_detail && pnpm build:ui:model_preview",
     "build:ui:search": "vite build ui/search --config ui/vite.config.ts",
     "build:ui:model_detail": "vite build ui/model-detail --config ui/vite.config.ts",
+    "build:ui:model_preview": "vite build ui/model-preview --config ui/vite.config.ts",
     "typecheck": "tsc --noEmit",
     "pretest": "pnpm build:ui",
     "test": "vitest run",
@@ -20,12 +21,15 @@
   },
   "packageManager": "pnpm@10.18.3",
   "dependencies": {
+    "@cgtrader/cgt-viewer": "^0.1.22",
     "@cloudflare/workers-oauth-provider": "^0.4.0",
     "@modelcontextprotocol/ext-apps": "^1.7.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "agents": "^0.11.4",
     "ai": "^6.0.168",
-    "zod": "^3.25"
+    "three": "^0.184.0",
+    "zod": "^3.25",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

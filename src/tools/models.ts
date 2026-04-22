@@ -21,6 +21,10 @@ import {
 } from "../services/free-guard.js";
 import { modelsToMarkdown, renderText } from "../services/format.js";
 import {
+  UrlResolutionError,
+  resolveModelIdFromUrl,
+} from "../services/url-resolver.js";
+import {
   categoryIdField,
   modelIdField,
   pageField,
@@ -29,14 +33,34 @@ import {
 } from "../schemas/common.js";
 import searchUiHtml from "../../ui/search/dist/index.html";
 import modelDetailUiHtml from "../../ui/model-detail/dist/index.html";
+import modelPreviewUiHtml from "../../ui/model-preview/dist/index.html";
 
 const SEARCH_UI_RESOURCE_URI = "ui://cgtrader/search.html";
 const MODEL_DETAIL_UI_RESOURCE_URI = "ui://cgtrader/model-detail.html";
+const MODEL_PREVIEW_UI_RESOURCE_URI = "ui://cgtrader/model-preview.html";
 
 // CGTrader serves model thumbnails from img-new.cgtrader.com (confirmed
 // 2026-04-22). The wildcard covers sibling subdomains in case the CDN host
 // rotates; tighten to the specific host if CSP exposure becomes a concern.
 const CGTRADER_IMG_DOMAINS = ["https://*.cgtrader.com"];
+// Signed download URLs resolve to AWS S3 (cgtfiles bucket). Must be in the
+// UI's connectDomains so the 3D viewer can XHR the model bytes from inside
+// the sandboxed iframe.
+const CGTRADER_S3_DOMAIN = "https://cgtfiles.s3.amazonaws.com";
+// Draco decoder files needed by @cgtrader/cgt-viewer for compressed glTF.
+// Served from a public CDN rather than bundled — the decoder is ~200 KB of
+// wasm that we don't want inlined into every UI bundle.
+const DRACO_CDN_DOMAIN = "https://cdn.jsdelivr.net";
+
+// Formats @cgtrader/cgt-viewer can render in-browser, in decreasing order of
+// preference. `.glb` is self-contained and always wins; plain `.gltf` is
+// skipped in favor of `.glb` because its external .bin / textures make
+// multi-file loads a nuisance without resolved asset URLs.
+const VIEWER_PREFERRED_EXTENSIONS = ["glb", "fbx", "obj", "stl", "gltf"] as const;
+type ViewerExtension = (typeof VIEWER_PREFERRED_EXTENSIONS)[number];
+const VIEWER_EXTENSION_SET: ReadonlySet<string> = new Set(
+  VIEWER_PREFERRED_EXTENSIONS,
+);
 
 function registerSearchUiResource(server: McpServer) {
   registerAppResource(
@@ -83,7 +107,37 @@ function registerModelDetailUiResource(server: McpServer) {
           _meta: {
             ui: {
               csp: {
-                resourceDomains: CGTRADER_IMG_DOMAINS,
+                resourceDomains: [...CGTRADER_IMG_DOMAINS, DRACO_CDN_DOMAIN],
+                connectDomains: [CGTRADER_S3_DOMAIN, DRACO_CDN_DOMAIN],
+              },
+            },
+          },
+        },
+      ],
+    }),
+  );
+}
+
+function registerModelPreviewUiResource(server: McpServer) {
+  registerAppResource(
+    server,
+    "CGTrader Model Preview",
+    MODEL_PREVIEW_UI_RESOURCE_URI,
+    {
+      description:
+        "Interactive 3D preview for a free CGTrader model (WebGPU/WebGL via @cgtrader/cgt-viewer).",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: MODEL_PREVIEW_UI_RESOURCE_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: modelPreviewUiHtml,
+          _meta: {
+            ui: {
+              csp: {
+                resourceDomains: [...CGTRADER_IMG_DOMAINS, DRACO_CDN_DOMAIN],
+                connectDomains: [CGTRADER_S3_DOMAIN, DRACO_CDN_DOMAIN],
               },
             },
           },
@@ -1054,9 +1108,209 @@ Returns:
   );
 }
 
+// ─── preview_model_3d (UI + URL→id resolution) ───────────────────────────────
+
+// The raw object schema (used for `.shape` on the tool's inputSchema) and the
+// refined version (used for actual parsing so we can enforce the XOR between
+// model_id and url). `.refine()` returns a ZodEffects which doesn't expose
+// `.shape`, so we keep both.
+const PreviewModelInputBase = z
+  .object({
+    model_id: modelIdField.optional(),
+    url: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "CGTrader product page URL (e.g. https://www.cgtrader.com/free-3d-models/...). Use this OR model_id.",
+      ),
+  })
+  .strict();
+
+const PreviewModelInputSchema = PreviewModelInputBase.refine(
+  (v) => (v.model_id === undefined) !== (v.url === undefined),
+  { message: "Provide exactly one of `model_id` or `url`." },
+);
+
+type PreviewModelInput = z.infer<typeof PreviewModelInputSchema>;
+
+export type PreviewCandidate = {
+  file_id: number;
+  name: string | undefined;
+  extension: ViewerExtension;
+};
+
+export type PreviewResult = {
+  model_id: number;
+  model_title: string | undefined;
+  model_url: string | undefined;
+  picked:
+    | (PreviewCandidate & {
+        download_url: string;
+        expires_hint: string;
+      })
+    | null;
+  candidates: PreviewCandidate[];
+  unsupported_extensions: string[];
+};
+
+function selectPreviewCandidates(
+  files: Array<{ id: number; name?: string }>,
+): { candidates: PreviewCandidate[]; unsupported: string[] } {
+  const unsupported: string[] = [];
+  const byExt: Record<ViewerExtension, PreviewCandidate[]> = {
+    glb: [],
+    fbx: [],
+    obj: [],
+    stl: [],
+    gltf: [],
+  };
+  for (const f of files) {
+    const ext = fileExtension(f.name);
+    if (!ext) continue;
+    if (VIEWER_EXTENSION_SET.has(ext)) {
+      byExt[ext as ViewerExtension].push({
+        file_id: f.id,
+        name: f.name,
+        extension: ext as ViewerExtension,
+      });
+    } else {
+      unsupported.push(ext);
+    }
+  }
+  const candidates: PreviewCandidate[] = [];
+  for (const ext of VIEWER_PREFERRED_EXTENSIONS) {
+    candidates.push(...byExt[ext]);
+  }
+  return {
+    candidates,
+    unsupported: Array.from(new Set(unsupported)),
+  };
+}
+
+function registerPreviewModel3d(server: McpServer, env: Env) {
+  registerAppTool(
+    server,
+    "cgtrader_preview_model_3d",
+    {
+      title: "Preview a free CGTrader model in 3D",
+      _meta: { ui: { resourceUri: MODEL_PREVIEW_UI_RESOURCE_URI } },
+      description: `Open an interactive 3D preview of a FREE CGTrader model, rendered in the host with @cgtrader/cgt-viewer (WebGPU/WebGL).
+
+Accepts either a numeric model_id OR a CGTrader product page URL. Resolves the URL to an id by scraping the page's JSON-LD Product.sku (fallback: items/{id} path in image srcs).
+
+Supported render formats: glb, fbx, obj, stl, gltf. The tool auto-picks the first available file in that preference order; the UI lets the user switch among candidates. Models that ship only in non-web formats (.blend, .max, .3ds, …) are returned with picked=null and a list of unsupported_extensions so the UI can explain the gap.
+
+Rejects if the model is not free.
+
+Args:
+  - model_id (number, optional): Numeric CGTrader model id.
+  - url (string, optional): CGTrader product page URL.
+  (Provide exactly one.)
+
+Returns: { model_id, model_title, model_url, picked: { file_id, name, extension, download_url, expires_hint } | null, candidates: [{ file_id, name, extension }], unsupported_extensions: [string] }.`,
+      inputSchema: PreviewModelInputBase.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (params: PreviewModelInput) => {
+      try {
+        // The tool's inputSchema uses the unrefined object so MCP validators
+        // accept partial inputs; we enforce the XOR between `model_id` and
+        // `url` here.
+        const gotId = params.model_id !== undefined;
+        const gotUrl = params.url !== undefined;
+        if (gotId === gotUrl) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Provide exactly one of `model_id` or `url`.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const modelId: number = gotId
+          ? params.model_id!
+          : await resolveModelIdFromUrl(params.url!);
+
+        const model = await fetchFreeModelOrThrow(env, modelId);
+        const { candidates, unsupported } = selectPreviewCandidates(
+          model.files ?? [],
+        );
+
+        let picked: PreviewResult["picked"] = null;
+        if (candidates.length > 0) {
+          const first = candidates[0]!;
+          const url = await resolveSignedUrl(env, modelId, first.file_id);
+          picked = {
+            ...first,
+            download_url: url,
+            expires_hint: EXPIRES_HINT,
+          };
+        }
+
+        const structured: PreviewResult = {
+          model_id: modelId,
+          model_title: model.title,
+          model_url: model.url,
+          picked,
+          candidates,
+          unsupported_extensions: unsupported,
+        };
+
+        const title = model.title ?? `model ${modelId}`;
+        const lines: string[] = [];
+        lines.push(`# 3D preview — ${title}`);
+        lines.push("");
+        if (picked) {
+          lines.push(
+            `Loaded \`${picked.name ?? `file ${picked.file_id}`}\` (${picked.extension}). ${candidates.length} candidate file${candidates.length === 1 ? "" : "s"} available.`,
+          );
+        } else if (unsupported.length > 0) {
+          lines.push(
+            `No web-previewable file found. Model ships as: ${unsupported.join(", ")}. Download and open in a native DCC tool.`,
+          );
+        } else {
+          lines.push(`No files are attached to model ${modelId}.`);
+        }
+
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          structuredContent: structured as unknown as Record<string, unknown>,
+        };
+      } catch (error) {
+        if (error instanceof FreeOnlyViolation) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+        if (error instanceof UrlResolutionError) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: "text", text: handleApiError(error) }],
+          isError: true,
+        };
+      }
+    },
+  );
+}
+
 export function registerModelTools(server: McpServer, env: Env) {
   registerSearchUiResource(server);
   registerModelDetailUiResource(server);
+  registerModelPreviewUiResource(server);
   registerSearchModels(server, env);
   registerGetModel(server, env);
   registerViewModel(server, env);
@@ -1064,4 +1318,5 @@ export function registerModelTools(server: McpServer, env: Env) {
   registerGetModelLicense(server, env);
   registerDownloadFreeFile(server, env);
   registerGetFreeModelDownloadUrls(server, env);
+  registerPreviewModel3d(server, env);
 }

@@ -19,7 +19,21 @@ vi.mock("../services/client.js", () => ({
   ApiError: class ApiError extends Error {},
 }));
 
+vi.mock("../services/url-resolver.js", async () => {
+  class UrlResolutionError extends Error {
+    constructor(m: string) {
+      super(m);
+      this.name = "UrlResolutionError";
+    }
+  }
+  return {
+    resolveModelIdFromUrl: vi.fn(),
+    UrlResolutionError,
+  };
+});
+
 import { apiGet, apiGetRaw } from "../services/client.js";
+import { resolveModelIdFromUrl } from "../services/url-resolver.js";
 import { registerModelTools } from "./models.js";
 
 const mockEnv = {} as Env;
@@ -77,6 +91,7 @@ function textOf(result: unknown): string {
 beforeEach(() => {
   vi.mocked(apiGet).mockReset();
   vi.mocked(apiGetRaw).mockReset();
+  vi.mocked(resolveModelIdFromUrl).mockReset();
 });
 
 describe("cgtrader_search_models elicitation", () => {
@@ -622,5 +637,170 @@ describe("cgtrader_get_free_model_download_urls", () => {
 
     expect(result.isError).toBe(true);
     expect(vi.mocked(apiGetRaw)).not.toHaveBeenCalled();
+  });
+});
+
+describe("cgtrader_preview_model_3d", () => {
+  const PREVIEW_MODEL: CGTraderModel = {
+    id: 300,
+    title: "Previewable Chair",
+    prices: { download: 0 },
+    files: [
+      { id: 41, name: "chair.blend" },
+      { id: 42, name: "chair.obj" },
+      { id: 43, name: "chair.glb" },
+      { id: 44, name: "chair.fbx" },
+    ],
+  };
+
+  type PreviewStructured = {
+    model_id: number;
+    model_title?: string;
+    picked: {
+      file_id: number;
+      extension: string;
+      download_url: string;
+      name?: string;
+    } | null;
+    candidates: Array<{ file_id: number; extension: string }>;
+    unsupported_extensions: string[];
+  };
+
+  it("picks glb when available and resolves the signed URL", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: PREVIEW_MODEL });
+    vi.mocked(apiGetRaw).mockResolvedValueOnce(
+      new Response(null, {
+        status: 200,
+        headers: { location: "https://s3.example.com/chair.glb" },
+      }),
+    );
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "cgtrader_preview_model_3d",
+      arguments: { model_id: PREVIEW_MODEL.id },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const s = result.structuredContent as PreviewStructured;
+    expect(s.picked?.file_id).toBe(43); // chair.glb
+    expect(s.picked?.extension).toBe("glb");
+    expect(s.picked?.download_url).toBe("https://s3.example.com/chair.glb");
+    // Candidates are ordered by preference (glb > fbx > obj > stl > gltf).
+    expect(s.candidates.map((c) => c.extension)).toEqual(["glb", "fbx", "obj"]);
+    expect(s.unsupported_extensions).toEqual(["blend"]);
+    // Only the picked file's redirect was fetched — we don't pre-resolve
+    // signed URLs for non-picked candidates.
+    expect(vi.mocked(apiGetRaw)).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a URL to a model id before fetching the model", async () => {
+    vi.mocked(resolveModelIdFromUrl).mockResolvedValueOnce(PREVIEW_MODEL.id);
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: PREVIEW_MODEL });
+    vi.mocked(apiGetRaw).mockResolvedValueOnce(
+      new Response(null, {
+        status: 200,
+        headers: { location: "https://s3.example.com/chair.glb" },
+      }),
+    );
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "cgtrader_preview_model_3d",
+      arguments: {
+        url: "https://www.cgtrader.com/free-3d-models/furniture/chair",
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(vi.mocked(resolveModelIdFromUrl)).toHaveBeenCalledWith(
+      "https://www.cgtrader.com/free-3d-models/furniture/chair",
+    );
+    const s = result.structuredContent as PreviewStructured;
+    expect(s.model_id).toBe(PREVIEW_MODEL.id);
+  });
+
+  it("returns picked=null when no web-viewable file exists", async () => {
+    const BLEND_ONLY_MODEL: CGTraderModel = {
+      id: 301,
+      title: "Blend Only",
+      prices: { download: 0 },
+      files: [
+        { id: 51, name: "scene.blend" },
+        { id: 52, name: "scene.max" },
+      ],
+    };
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: BLEND_ONLY_MODEL });
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "cgtrader_preview_model_3d",
+      arguments: { model_id: BLEND_ONLY_MODEL.id },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const s = result.structuredContent as PreviewStructured;
+    expect(s.picked).toBeNull();
+    expect(s.candidates).toEqual([]);
+    expect(s.unsupported_extensions.sort()).toEqual(["blend", "max"]);
+    // No signed-URL resolution should have happened.
+    expect(vi.mocked(apiGetRaw)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a paid model before resolving any URLs", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: PAID_MODEL });
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "cgtrader_preview_model_3d",
+      arguments: { model_id: PAID_MODEL.id },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/not free/);
+    expect(vi.mocked(apiGetRaw)).not.toHaveBeenCalled();
+  });
+
+  it("surfaces URL-resolution failures as a clean error", async () => {
+    vi.mocked(resolveModelIdFromUrl).mockRejectedValueOnce(
+      new (
+        await import("../services/url-resolver.js")
+      ).UrlResolutionError("Could not locate a model id in https://…"),
+    );
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "cgtrader_preview_model_3d",
+      arguments: { url: "https://www.cgtrader.com/free-3d-models/unknown" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/Could not locate a model id/);
+    expect(vi.mocked(apiGet)).not.toHaveBeenCalled();
+  });
+
+  it("rejects input that supplies both model_id and url", async () => {
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "cgtrader_preview_model_3d",
+      arguments: {
+        model_id: 300,
+        url: "https://www.cgtrader.com/free-3d-models/furniture/chair",
+      },
+    });
+    // Zod rejection surfaces as an error response, not a thrown exception.
+    expect(result.isError).toBe(true);
+    expect(vi.mocked(apiGet)).not.toHaveBeenCalled();
+    expect(vi.mocked(resolveModelIdFromUrl)).not.toHaveBeenCalled();
+  });
+
+  it("rejects input that supplies neither model_id nor url", async () => {
+    const client = await connectedClient();
+    const result = await client.callTool({
+      name: "cgtrader_preview_model_3d",
+      arguments: {},
+    });
+    expect(result.isError).toBe(true);
+    expect(vi.mocked(apiGet)).not.toHaveBeenCalled();
   });
 });

@@ -50,3 +50,25 @@ export type DownloadResult = {
   expires_hint?: string;
   agent_note?: string;
 };
+
+export type PreviewExtension = "glb" | "fbx" | "obj" | "stl" | "gltf";
+
+export type PreviewCandidate = {
+  file_id: number;
+  name?: string;
+  extension: PreviewExtension;
+};
+
+export type PreviewResult = {
+  model_id: number;
+  model_title?: string;
+  model_url?: string;
+  picked:
+    | (PreviewCandidate & {
+        download_url: string;
+        expires_hint: string;
+      })
+    | null;
+  candidates: PreviewCandidate[];
+  unsupported_extensions: string[];
+};

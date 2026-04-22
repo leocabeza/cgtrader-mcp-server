@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CGTrader — Free model 3D preview</title>
+  </head>
+  <body>
+    <main class="app" id="app">
+      <header class="toolbar">
+        <div class="summary" id="summary">Loading preview…</div>
+        <div class="toolbar-right">
+          <select id="candidate-select" hidden aria-label="File to preview"></select>
+          <button type="button" class="fullscreen-btn" id="fullscreen-btn" hidden>
+            Fullscreen
+          </button>
+        </div>
+      </header>
+
+      <section class="viewer-stage" id="viewer-stage">
+        <div class="loader" id="loader" aria-live="polite" aria-busy="true">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="loader-label">Loading preview…</div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

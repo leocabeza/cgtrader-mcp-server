@@ -1,0 +1,141 @@
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-background-primary, #fff);
+  color: var(--color-text-primary, #111);
+  font-family: var(--font-sans, system-ui, -apple-system, Segoe UI, sans-serif);
+  font-size: var(--font-text-base-size, 14px);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary {
+  color: var(--color-text-secondary, #555);
+  font-size: var(--font-text-sm-size, 13px);
+}
+
+.fullscreen-btn,
+#candidate-select {
+  background: var(--color-background-secondary, #f3f3f3);
+  color: var(--color-text-primary, #111);
+  border: 1px solid var(--color-border-primary, #ddd);
+  border-radius: var(--border-radius-md, 6px);
+  padding: 6px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.fullscreen-btn:hover {
+  background: var(--color-background-tertiary, #ebebeb);
+}
+
+.viewer-stage {
+  position: relative;
+  flex: 1;
+  min-height: 420px;
+  border: 1px solid var(--color-border-primary, #ddd);
+  border-radius: var(--border-radius-md, 6px);
+  overflow: hidden;
+  background: var(--color-background-secondary, #f5f5f5);
+}
+
+.viewer-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 0;
+  color: var(--color-text-secondary, #555);
+}
+
+/* Nested inside .viewer-stage as an overlay so loading state tracks the
+   viewer region regardless of scroll position — sibling-below-stage made
+   the spinner appear outside the visible area during format switches. */
+.viewer-stage .loader {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  background: color-mix(
+    in srgb,
+    var(--color-background-secondary, #f5f5f5) 85%,
+    transparent
+  );
+  z-index: 2;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border-primary, #ddd);
+  border-top-color: var(--color-text-primary, #111);
+  animation: spin 0.8s linear infinite;
+}
+
+.loader-label {
+  font-size: var(--font-text-sm-size, 13px);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2s;
+  }
+}
+
+.error {
+  padding: 16px;
+  background: #fde6e6;
+  color: #7a1f1f;
+  border: 1px solid #f5bcbc;
+  border-radius: var(--border-radius-md, 6px);
+  font-size: var(--font-text-sm-size, 13px);
+}
+
+.empty {
+  padding: 24px;
+  color: var(--color-text-secondary, #555);
+  font-size: var(--font-text-sm-size, 13px);
+  text-align: center;
+}

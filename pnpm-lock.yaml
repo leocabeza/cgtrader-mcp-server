@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@cgtrader/cgt-viewer':
+        specifier: ^0.1.22
+        version: 0.1.22(three@0.184.0)(zustand@5.0.12(react@19.2.5))
       '@cloudflare/workers-oauth-provider':
         specifier: ^0.4.0
         version: 0.4.0
@@ -23,9 +26,15 @@ importers:
       ai:
         specifier: ^6.0.168
         version: 6.0.168(zod@3.25.76)
+      three:
+        specifier: ^0.184.0
+        version: 0.184.0
       zod:
         specifier: ^3.25
         version: 3.25.76
+      zustand:
+        specifier: ^5.0.12
+        version: 5.0.12(react@19.2.5)
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20250101.0
@@ -196,6 +205,12 @@ packages:
 
   '@cfworker/json-schema@4.1.1':
     resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
+
+  '@cgtrader/cgt-viewer@0.1.22':
+    resolution: {integrity: sha512-dtNPQpcCJIqWA3ZDrkWcSq0RG476nYFN4eBNNxd2+uQoYnAyeyeKEbGLKcGUI+TgEFvHTD8BlXdcWrRp881GSw==}
+    peerDependencies:
+      three: '>=0.183.2'
+      zustand: '>=5.0.12'
 
   '@cloudflare/kv-asset-handler@0.4.2':
     resolution: {integrity: sha512-SIOD2DxrRRwQ+jgzlXCqoEFiKOFqaPjhnNTGKXSRLvp1HiOvapLaFG2kEr9dYQTYe8rKrd9uvDUzmAITeNyaHQ==}
@@ -1073,6 +1088,9 @@ packages:
       picomatch:
         optional: true
 
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
+
   fill-range@7.1.1:
     resolution: {integrity: sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg==}
     engines: {node: '>=8'}
@@ -1571,6 +1589,9 @@ packages:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
     engines: {node: '>=8'}
 
+  three@0.184.0:
+    resolution: {integrity: sha512-wtTRjG92pM5eUg/KuUnHsqSAlPM296brTOcLgMRqEeylYTh/CdtvKUvCyyCQTzFuStieWxvZb8mVTMvdPyUpxg==}
+
   tinybench@2.9.0:
     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
 
@@ -1794,6 +1815,24 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
+  zustand@5.0.12:
+    resolution: {integrity: sha512-i77ae3aZq4dhMlRhJVCYgMLKuSiZAaUPAct2AksxQ+gOtimhGMdXljRT21P5BNpeT4kXlLIckvkPM029OljD7g==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+      immer: '>=9.0.6'
+      react: '>=18.0.0'
+      use-sync-external-store: '>=1.2.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      immer:
+        optional: true
+      react:
+        optional: true
+      use-sync-external-store:
+        optional: true
+
 snapshots:
 
   '@ai-sdk/gateway@3.0.104(zod@3.25.76)':
@@ -1989,6 +2028,12 @@ snapshots:
   '@bcoe/v8-coverage@1.0.2': {}
 
   '@cfworker/json-schema@4.1.1': {}
+
+  '@cgtrader/cgt-viewer@0.1.22(three@0.184.0)(zustand@5.0.12(react@19.2.5))':
+    dependencies:
+      fflate: 0.8.2
+      three: 0.184.0
+      zustand: 5.0.12(react@19.2.5)
 
   '@cloudflare/kv-asset-handler@0.4.2': {}
 
@@ -2716,6 +2761,8 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.4
 
+  fflate@0.8.2: {}
+
   fill-range@7.1.1:
     dependencies:
       to-regex-range: 5.0.1
@@ -3208,6 +3255,8 @@ snapshots:
     dependencies:
       has-flag: 4.0.0
 
+  three@0.184.0: {}
+
   tinybench@2.9.0: {}
 
   tinyexec@1.1.1: {}
@@ -3373,3 +3422,7 @@ snapshots:
       zod: 3.25.76
 
   zod@3.25.76: {}
+
+  zustand@5.0.12(react@19.2.5):
+    optionalDependencies:
+      react: 19.2.5

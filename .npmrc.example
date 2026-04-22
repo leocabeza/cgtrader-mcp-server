@@ -1,0 +1,10 @@
+# Authentication for scoped private packages (@cgtrader/*).
+#
+# The token is expanded from the NPM_TOKEN environment variable at install
+# time, so it never lands in git. Export it in your shell (e.g. .zshrc) or in
+# CI secrets before running pnpm install.
+#
+# Source: the same `_authToken` used by the main CGTrader monorepo's .npmrc.
+# If you don't have it, grab it from 1Password / an existing dev machine.
+
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}

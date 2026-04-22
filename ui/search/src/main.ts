@@ -196,7 +196,6 @@ function showGrid(): void {
       );
   backBtn.hidden = true;
   summaryEl.textContent = lastSummary;
-  window.scrollTo({ top: 0 });
 }
 
 function showDetail(): void {

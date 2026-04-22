@@ -183,6 +183,7 @@ function showGrid(): void {
   detailHandle?.destroy();
   detailHandle = null;
   clearChildren(detailContainerEl);
+  detailContainerEl.classList.remove("detail");
   detailContainerEl.hidden = true;
 
   gridEl.hidden = false;
@@ -195,6 +196,7 @@ function showGrid(): void {
       );
   backBtn.hidden = true;
   summaryEl.textContent = lastSummary;
+  window.scrollTo({ top: 0 });
 }
 
 function showDetail(): void {

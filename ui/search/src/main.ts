@@ -207,7 +207,6 @@ async function openDetail(m: Model): Promise<void> {
   showDetail();
   clearChildren(detailContainerEl);
   detailContainerEl.classList.remove("detail");
-  summaryEl.textContent = `Opening "${title}"…`;
   setLoading(true, `Opening "${title}"…`);
 
   try {

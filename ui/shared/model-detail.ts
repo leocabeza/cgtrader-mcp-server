@@ -261,21 +261,24 @@ export function renderModelDetail(
   previewStage.className = "preview-stage";
   previewSection.appendChild(previewHeader);
   previewSection.appendChild(previewStage);
-  meta.appendChild(previewSection);
 
   // ── description (optional) ────────────────────────────────────────────
-  const descText = model.description ? htmlToPlainText(model.description) : "";
-  if (descText) {
-    const desc = document.createElement("section");
-    desc.className = "description";
+  const descFrag = model.description
+    ? buildDescriptionFragment(model.description)
+    : null;
+  const descSection = document.createElement("section");
+  descSection.className = "description";
+  let descBody: HTMLDivElement | null = null;
+  if (descFrag) {
     const h = document.createElement("h2");
     h.textContent = "Description";
-    const body = document.createElement("div");
-    body.className = "description-body";
-    body.textContent = descText;
-    desc.appendChild(h);
-    desc.appendChild(body);
-    meta.appendChild(desc);
+    descBody = document.createElement("div");
+    descBody.className = "description-body";
+    descBody.appendChild(descFrag);
+    descSection.appendChild(h);
+    descSection.appendChild(descBody);
+  } else {
+    descSection.hidden = true;
   }
 
   // ── downloads panel (populated on demand) ─────────────────────────────
@@ -291,10 +294,16 @@ export function renderModelDetail(
   downloadsSection.appendChild(dlHeader);
   downloadsSection.appendChild(dlList);
   downloadsSection.appendChild(dlHint);
-  meta.appendChild(downloadsSection);
 
+  // Full-width rows below the gallery/meta grid row. The preview panel, the
+  // description, and the downloads panel each span `grid-column: 1 / -1` so
+  // prose can breathe and short descriptions don't leave a void next to the
+  // gallery.
   container.appendChild(gallery);
   container.appendChild(meta);
+  container.appendChild(previewSection);
+  container.appendChild(descSection);
+  container.appendChild(downloadsSection);
 
   renderGallery();
 
@@ -312,6 +321,20 @@ export function renderModelDetail(
     }
   };
   externalBtn.addEventListener("click", onExternal);
+
+  // Route anchors embedded in the description through deps.openLink so hosts
+  // (Claude Desktop, etc.) that intercept external navigation stay in charge.
+  const onDescriptionClick = (e: Event): void => {
+    const anchor = (e.target as Element | null)?.closest?.("a");
+    if (!anchor) return;
+    const href = anchor.getAttribute("href");
+    if (!href) return;
+    e.preventDefault();
+    void deps
+      .openLink({ url: href })
+      .catch((err) => console.error("openLink failed", err));
+  };
+  if (descBody) descBody.addEventListener("click", onDescriptionClick);
 
   const renderDownloads = (result: DownloadResult): void => {
     clearChildren(dlList);
@@ -430,6 +453,7 @@ export function renderModelDetail(
       downloadBtn.removeEventListener("click", onDownload);
       previewBtn.removeEventListener("click", onPreview);
       previewBackBtn.removeEventListener("click", closePreview);
+      descBody?.removeEventListener("click", onDescriptionClick);
       previewDisposer?.();
       previewDisposer = null;
     },
@@ -452,23 +476,119 @@ function licenseLabel(raw: string): string {
   return LICENSE_LABELS[raw] ?? raw;
 }
 
-/**
- * Strips HTML tags from CGTrader's description field while preserving
- * paragraph breaks. We parse (not innerHTML-assign) so no scripts execute,
- * then read textContent from each top-level child to keep <p>/<br> structure
- * as blank lines — the CSS on .description-body is `white-space: pre-wrap`
- * which renders those newlines visually.
- */
-function htmlToPlainText(html: string): string {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  const children = Array.from(doc.body.children);
-  if (children.length === 0) return (doc.body.textContent ?? "").trim();
-  const parts: string[] = [];
-  for (const node of children) {
-    const text = (node.textContent ?? "").trim();
-    if (text) parts.push(text);
+const BLOCK_TAGS: ReadonlySet<string> = new Set([
+  "P",
+  "DIV",
+  "LI",
+  "UL",
+  "OL",
+  "BLOCKQUOTE",
+  "PRE",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+]);
+
+const URL_REGEX = /\bhttps?:\/\/\S+/g;
+const URL_TRAIL_PUNCT = /[.,!?;:)\]}>]+$/;
+
+function linkifyInto(text: string, out: DocumentFragment | Element): void {
+  if (!text) return;
+  let lastIdx = 0;
+  for (const m of text.matchAll(URL_REGEX)) {
+    const start = m.index ?? 0;
+    if (start > lastIdx) {
+      out.appendChild(document.createTextNode(text.slice(lastIdx, start)));
+    }
+    let url = m[0];
+    let trail = "";
+    const pm = url.match(URL_TRAIL_PUNCT);
+    if (pm) {
+      trail = pm[0];
+      url = url.slice(0, url.length - trail.length);
+    }
+    const safe = safeHttpUrl(url);
+    if (safe) {
+      const a = document.createElement("a");
+      a.href = safe;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = url;
+      out.appendChild(a);
+    } else {
+      out.appendChild(document.createTextNode(url));
+    }
+    if (trail) out.appendChild(document.createTextNode(trail));
+    lastIdx = start + m[0].length;
   }
-  return parts.join("\n\n");
+  if (lastIdx < text.length) {
+    out.appendChild(document.createTextNode(text.slice(lastIdx)));
+  }
+}
+
+/**
+ * Parses CGTrader's description HTML into a DocumentFragment, keeping anchors
+ * (with safe hrefs) and linkifying bare URLs in text nodes. Block elements
+ * emit trailing "\n\n" so `white-space: pre-wrap` on .description-body still
+ * renders paragraph breaks. Parsing via DOMParser means no script execution
+ * and no innerHTML assignment on the live document. Returns null when the
+ * description has no renderable content.
+ */
+function buildDescriptionFragment(html: string): DocumentFragment | null {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const frag = document.createDocumentFragment();
+
+  const walk = (node: Node, out: DocumentFragment): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      linkifyInto(node.textContent ?? "", out);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as Element;
+    const tag = el.tagName;
+    if (tag === "SCRIPT" || tag === "STYLE") return;
+    if (tag === "BR") {
+      out.appendChild(document.createTextNode("\n"));
+      return;
+    }
+    if (tag === "A") {
+      const rawHref = (el as HTMLAnchorElement).getAttribute("href") ?? "";
+      const safe = safeHttpUrl(rawHref);
+      const text = el.textContent ?? "";
+      if (safe) {
+        const a = document.createElement("a");
+        a.href = safe;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = text || safe;
+        out.appendChild(a);
+      } else if (text) {
+        linkifyInto(text, out);
+      }
+      return;
+    }
+    for (const child of Array.from(el.childNodes)) walk(child, out);
+    if (BLOCK_TAGS.has(tag)) {
+      out.appendChild(document.createTextNode("\n\n"));
+    }
+  };
+
+  for (const child of Array.from(doc.body.childNodes)) walk(child, frag);
+
+  while (frag.lastChild && frag.lastChild.nodeType === Node.TEXT_NODE) {
+    const trimmed = (frag.lastChild.textContent ?? "").replace(/\s+$/, "");
+    if (trimmed === "") {
+      frag.removeChild(frag.lastChild);
+    } else {
+      frag.lastChild.textContent = trimmed;
+      break;
+    }
+  }
+
+  return frag.firstChild ? frag : null;
 }
 
 function buildGalleryUrls(model: Model, images: Image[]): string[] {

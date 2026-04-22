@@ -28,13 +28,15 @@ import {
   responseFormatField,
 } from "../schemas/common.js";
 import searchUiHtml from "../../ui/search/dist/index.html";
+import modelDetailUiHtml from "../../ui/model-detail/dist/index.html";
 
 const SEARCH_UI_RESOURCE_URI = "ui://cgtrader/search.html";
+const MODEL_DETAIL_UI_RESOURCE_URI = "ui://cgtrader/model-detail.html";
 
 // CGTrader serves model thumbnails from img-new.cgtrader.com (confirmed
 // 2026-04-22). The wildcard covers sibling subdomains in case the CDN host
 // rotates; tighten to the specific host if CSP exposure becomes a concern.
-const SEARCH_UI_IMG_DOMAINS = ["https://*.cgtrader.com"];
+const CGTRADER_IMG_DOMAINS = ["https://*.cgtrader.com"];
 
 function registerSearchUiResource(server: McpServer) {
   registerAppResource(
@@ -53,7 +55,35 @@ function registerSearchUiResource(server: McpServer) {
           _meta: {
             ui: {
               csp: {
-                resourceDomains: SEARCH_UI_IMG_DOMAINS,
+                resourceDomains: CGTRADER_IMG_DOMAINS,
+              },
+            },
+          },
+        },
+      ],
+    }),
+  );
+}
+
+function registerModelDetailUiResource(server: McpServer) {
+  registerAppResource(
+    server,
+    "CGTrader Model Detail",
+    MODEL_DETAIL_UI_RESOURCE_URI,
+    {
+      description:
+        "Detail view for a single free CGTrader model: image gallery, metadata, and download CTAs.",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: MODEL_DETAIL_UI_RESOURCE_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: modelDetailUiHtml,
+          _meta: {
+            ui: {
+              csp: {
+                resourceDomains: CGTRADER_IMG_DOMAINS,
               },
             },
           },
@@ -541,6 +571,81 @@ Returns: the full model object (id, title, author_name, url, category_id, subcat
   );
 }
 
+// ─── view_model (UI-only) ────────────────────────────────────────────────────
+
+const ViewModelInputSchema = z
+  .object({
+    model_id: modelIdField,
+  })
+  .strict();
+
+type ViewModelInput = z.infer<typeof ViewModelInputSchema>;
+
+function registerViewModel(server: McpServer, env: Env) {
+  registerAppTool(
+    server,
+    "cgtrader_view_model",
+    {
+      title: "View a free CGTrader model (UI)",
+      _meta: { ui: { resourceUri: MODEL_DETAIL_UI_RESOURCE_URI } },
+      description: `Render the detail view for a single free CGTrader model.
+
+This tool is optimized for the Model Detail UI: it fetches the model and its preview images in one call and returns them together as structured content. Prefer cgtrader_get_model for plain-text/markdown summaries with follow-up elicitation.
+
+Rejects with an error if the model is not free.
+
+Args:
+  - model_id (number, required): CGTrader model id.
+
+Returns: { model, images } — the full model object plus an array of preview images.`,
+      inputSchema: ViewModelInputSchema.shape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: ViewModelInput) => {
+      try {
+        // Fetch model (with free-guard) and images in parallel. Images can
+        // legitimately 404 or come back empty — don't fail the whole view
+        // over it; the gallery falls back to model.thumbnails.
+        const modelP = fetchFreeModelOrThrow(env, params.model_id);
+        const imagesP = apiGet<{ images?: CGTraderImage[] } | CGTraderImage[]>(
+          env,
+          `/models/${params.model_id}/images`,
+        ).catch(() => [] as CGTraderImage[]);
+        const [model, imagesRaw] = await Promise.all([modelP, imagesP]);
+        const images: CGTraderImage[] = Array.isArray(imagesRaw)
+          ? imagesRaw
+          : (imagesRaw.images ?? []);
+
+        const structured = { model, images };
+        // The LLM-facing text fallback stays terse — the UI is the primary
+        // surface for this tool. Keep just enough so a text-only client isn't
+        // staring at an empty response.
+        const text = `Loaded "${model.title ?? `model ${model.id}`}" (${images.length} preview image${images.length === 1 ? "" : "s"}).`;
+        return {
+          content: [{ type: "text", text }],
+          structuredContent: structured as unknown as Record<string, unknown>,
+        };
+      } catch (error) {
+        if (error instanceof FreeOnlyViolation) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: "text", text: handleApiError(error) }],
+          isError: true,
+        };
+      }
+    },
+  );
+}
+
 // ─── get_model_images ────────────────────────────────────────────────────────
 
 const GetModelImagesInputSchema = z
@@ -951,8 +1056,10 @@ Returns:
 
 export function registerModelTools(server: McpServer, env: Env) {
   registerSearchUiResource(server);
+  registerModelDetailUiResource(server);
   registerSearchModels(server, env);
   registerGetModel(server, env);
+  registerViewModel(server, env);
   registerGetModelImages(server, env);
   registerGetModelLicense(server, env);
   registerDownloadFreeFile(server, env);

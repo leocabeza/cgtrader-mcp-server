@@ -45,10 +45,30 @@ const loaderEl = document.getElementById("loader") as HTMLElement;
 let lastArgs: Record<string, unknown> = {};
 let currentResult: SearchResult | null = null;
 let displayMode: "inline" | "fullscreen" | string = "inline";
+let navigating = false;
+let navigationTimeoutId: number | null = null;
 
-function setLoading(on: boolean): void {
+const loaderLabelEl = loaderEl.querySelector(".loader-label") as HTMLElement;
+const DEFAULT_LOADER_LABEL = loaderLabelEl.textContent ?? "Loading…";
+
+function setLoading(on: boolean, label?: string): void {
   root.classList.toggle("loading", on);
   loaderEl.hidden = !on;
+  loaderLabelEl.textContent = on ? label ?? DEFAULT_LOADER_LABEL : DEFAULT_LOADER_LABEL;
+}
+
+function clearNavigation(): void {
+  navigating = false;
+  if (navigationTimeoutId !== null) {
+    window.clearTimeout(navigationTimeoutId);
+    navigationTimeoutId = null;
+  }
+}
+
+function failNavigation(message: string): void {
+  clearNavigation();
+  setLoading(false);
+  summaryEl.textContent = message;
 }
 
 function pickThumb(m: Model): string | undefined {
@@ -73,15 +93,54 @@ function makeChip(label: string): HTMLElement {
   return span;
 }
 
+// Safety valve: if the host hasn't torn us down within this window, assume
+// the LLM didn't route the message to the detail tool and let the user retry.
+const NAVIGATION_TIMEOUT_MS = 30_000;
+
+function openDetail(m: Model): void {
+  if (navigating) return;
+  const title = m.title ?? `model ${m.id}`;
+
+  navigating = true;
+  setLoading(true, `Opening "${title}"…`);
+  navigationTimeoutId = window.setTimeout(() => {
+    failNavigation("That took longer than expected — try clicking the model again.");
+  }, NAVIGATION_TIMEOUT_MS);
+
+  // sendMessage resolves when the host acknowledges the message, not when the
+  // LLM finishes its turn — so we don't clear the loader on resolve. The host
+  // will tear this UI down when it swaps to the detail UI; until then we wait,
+  // falling back to the timeout above if nothing happens.
+  app
+    .sendMessage({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `Open the CGTrader detail view for model id ${m.id} ("${title}") by calling cgtrader_view_model with model_id=${m.id}.`,
+        },
+      ],
+    })
+    .then((res) => {
+      if (res.isError) {
+        failNavigation("The host rejected the request — try again.");
+      }
+    })
+    .catch((e) => {
+      console.error("sendMessage failed", e);
+      failNavigation("Couldn't open detail view — try again.");
+    });
+}
+
 function makeCard(m: Model): HTMLElement {
-  const href =
+  const externalHref =
     safeHttpUrl(m.url) ??
     `https://www.cgtrader.com/3d-models/${Number(m.id) || 0}`;
-  const a = document.createElement("a");
-  a.className = "card";
-  a.href = href;
-  a.target = "_blank";
-  a.rel = "noreferrer noopener";
+
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "card";
+  card.addEventListener("click", () => openDetail(m));
 
   const thumb = safeHttpUrl(pickThumb(m));
   if (thumb) {
@@ -90,11 +149,11 @@ function makeCard(m: Model): HTMLElement {
     img.loading = "lazy";
     img.alt = "";
     img.src = thumb;
-    a.appendChild(img);
+    card.appendChild(img);
   } else {
     const ph = document.createElement("div");
     ph.className = "thumb";
-    a.appendChild(ph);
+    card.appendChild(ph);
   }
 
   const body = document.createElement("div");
@@ -126,8 +185,22 @@ function makeCard(m: Model): HTMLElement {
     body.appendChild(chipWrap);
   }
 
-  a.appendChild(body);
-  return a;
+  const footer = document.createElement("div");
+  footer.className = "card-footer";
+  const external = document.createElement("span");
+  external.className = "external-link";
+  external.textContent = "See on CGTrader ↗";
+  external.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void app
+      .openLink({ url: externalHref })
+      .catch((err) => console.error("openLink failed", err));
+  });
+  footer.appendChild(external);
+  body.appendChild(footer);
+
+  card.appendChild(body);
+  return card;
 }
 
 function clearChildren(el: Element): void {
@@ -211,6 +284,7 @@ const app = new App({ name: "CGTrader Search", version: "0.1.0" });
 app.onhostcontextchanged = handleHostContextChanged;
 
 app.ontoolinput = (params) => {
+  clearNavigation();
   lastArgs = { ...(params.arguments as Record<string, unknown>) };
   summaryEl.textContent = "Searching CGTrader…";
   clearChildren(gridEl);
@@ -218,6 +292,7 @@ app.ontoolinput = (params) => {
 };
 
 app.ontoolresult = (result: CallToolResult) => {
+  clearNavigation();
   setLoading(false);
   const structured = result.structuredContent as SearchResult | undefined;
   if (structured) {

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CGTrader — Free model detail</title>
+  </head>
+  <body>
+    <main class="app" id="app">
+      <header class="toolbar">
+        <div class="summary" id="summary">Loading model…</div>
+        <button type="button" class="fullscreen-btn" id="fullscreen-btn" hidden>
+          Fullscreen
+        </button>
+      </header>
+
+      <section class="detail" id="detail" hidden>
+        <div class="gallery">
+          <div class="gallery-main">
+            <img id="hero" class="hero" alt="" />
+            <button
+              type="button"
+              class="nav-btn prev"
+              id="hero-prev"
+              aria-label="Previous image"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              class="nav-btn next"
+              id="hero-next"
+              aria-label="Next image"
+            >
+              ›
+            </button>
+          </div>
+          <div class="thumb-strip" id="thumb-strip"></div>
+        </div>
+
+        <div class="meta">
+          <h1 class="title" id="title"></h1>
+          <div class="author" id="author"></div>
+          <div class="chips" id="chips"></div>
+
+          <dl class="facts" id="facts"></dl>
+
+          <div class="cta-row">
+            <button
+              type="button"
+              class="cta primary"
+              id="download-btn"
+              disabled
+            >
+              Get free download
+            </button>
+            <button type="button" class="cta secondary" id="external-btn">
+              See on CGTrader
+            </button>
+          </div>
+
+          <section class="description" id="description" hidden>
+            <h2>Description</h2>
+            <div class="description-body" id="description-body"></div>
+          </section>
+
+          <section class="downloads" id="downloads" hidden>
+            <h2>Download links</h2>
+            <ul class="download-list" id="download-list"></ul>
+            <p class="hint" id="download-hint"></p>
+          </section>
+        </div>
+      </section>
+
+      <div class="loader" id="loader" aria-live="polite" aria-busy="true">
+        <div class="spinner" aria-hidden="true"></div>
+        <div class="loader-label">Loading model…</div>
+      </div>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

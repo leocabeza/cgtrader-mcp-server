@@ -70,11 +70,40 @@ body {
   text-decoration: none;
   color: inherit;
   transition: transform 120ms ease, border-color 120ms ease;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  width: 100%;
 }
 
 .card:hover {
   transform: translateY(-1px);
   border-color: var(--color-border-secondary, #c9c9c9);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--color-text-primary, #111);
+  outline-offset: 2px;
+}
+
+.card-footer {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.external-link {
+  font-size: 11px;
+  color: var(--color-text-secondary, #555);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--border-radius-sm, 4px);
+}
+
+.external-link:hover {
+  color: var(--color-text-primary, #111);
+  background: var(--color-background-tertiary, #ebebeb);
 }
 
 .thumb {

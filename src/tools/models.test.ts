@@ -1,9 +1,15 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { z } from "zod/v4";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../env.js";
 import type { CGTraderModel } from "../types.js";
+
+type ElicitResponder = (
+  req: z.infer<typeof ElicitRequestSchema>,
+) => Promise<unknown>;
 
 vi.mock("../services/client.js", () => ({
   apiGet: vi.fn(),
@@ -36,10 +42,22 @@ const PAID_MODEL: CGTraderModel = {
   files: [{ id: 10, name: "chair.obj" }],
 };
 
-async function connectedClient(): Promise<Client> {
+async function connectedClient(opts?: {
+  elicitation?: boolean;
+  responder?: ElicitResponder;
+}): Promise<Client> {
   const server = new McpServer({ name: "test-server", version: "0.0.0" });
   registerModelTools(server, mockEnv);
-  const client = new Client({ name: "test-client", version: "0.0.0" });
+  const client = new Client(
+    { name: "test-client", version: "0.0.0" },
+    opts?.elicitation ? { capabilities: { elicitation: {} } } : undefined,
+  );
+  if (opts?.responder) {
+    client.setRequestHandler(
+      ElicitRequestSchema,
+      opts.responder as (req: unknown) => Promise<never>,
+    );
+  }
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([
     server.connect(serverTransport),
@@ -59,6 +77,177 @@ function textOf(result: unknown): string {
 beforeEach(() => {
   vi.mocked(apiGet).mockReset();
   vi.mocked(apiGetRaw).mockReset();
+});
+
+describe("cgtrader_search_models elicitation", () => {
+  it("applies elicited refinements when the user accepts", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 1, models: [FREE_MODEL] });
+    const captured: unknown[] = [];
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async (req) => {
+        captured.push(req);
+        return {
+          action: "accept",
+          content: {
+            format: "blend",
+            complexity: "lt_5k",
+            sort: "newest",
+          },
+        };
+      },
+    });
+
+    await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(captured).toHaveLength(1);
+    const params = vi.mocked(apiGet).mock.calls[0]![2] as Record<string, unknown>;
+    expect(params.extensions).toBe("blend");
+    expect(params.polygons).toBe("lt_5k");
+    expect(params.sort).toBe("newest");
+  });
+
+  it("treats 'any' selections as no filter and keeps defaults", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({
+        action: "accept",
+        content: { format: "any", complexity: "any", sort: "best_match" },
+      }),
+    });
+
+    await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    const params = vi.mocked(apiGet).mock.calls[0]![2] as Record<string, unknown>;
+    expect(params.extensions).toBeUndefined();
+    expect(params.polygons).toBeUndefined();
+    expect(params.sort).toBe("best_match");
+  });
+
+  it("runs with defaults when the user declines", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({ action: "decline" }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const params = vi.mocked(apiGet).mock.calls[0]![2] as Record<string, unknown>;
+    expect(params.extensions).toBeUndefined();
+    expect(params.polygons).toBeUndefined();
+  });
+
+  it("does NOT elicit when the caller already supplied refinement params", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const responder = vi.fn(async () => ({ action: "accept", content: {} }));
+    const client = await connectedClient({
+      elicitation: true,
+      responder,
+    });
+
+    await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair", low_poly: true },
+    });
+
+    expect(responder).not.toHaveBeenCalled();
+  });
+
+  it("does NOT elicit when the host lacks elicitation capability", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const client = await connectedClient(); // no capability declared
+
+    const result = await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("surfaces user-supplied notes as a hint in the result text", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({
+        action: "accept",
+        content: {
+          format: "any",
+          complexity: "any",
+          sort: "best_match",
+          notes: "needs to open in Cinema 4D",
+        },
+      }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(textOf(result)).toContain("User added a note");
+    expect(textOf(result)).toContain("Cinema 4D");
+  });
+
+  it("ignores empty / whitespace-only notes", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({
+        action: "accept",
+        content: { format: "any", complexity: "any", notes: "   " },
+      }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(textOf(result)).not.toContain("User added a note");
+  });
+
+  it("appends a decline hint when the user declines the refinement", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({ action: "decline" }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(textOf(result)).toContain("User declined the refinement prompt");
+  });
+
+  it("does NOT append a decline hint when the user cancels (vs. declines)", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ total: 0, models: [] });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({ action: "cancel" }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_search_models",
+      arguments: { keywords: "chair" },
+    });
+
+    expect(textOf(result)).not.toContain("User declined");
+  });
 });
 
 describe("cgtrader_search_models", () => {
@@ -115,6 +304,83 @@ describe("cgtrader_get_model", () => {
     expect(result.isError).toBeFalsy();
     expect(textOf(result)).toContain("Free Chair");
     expect((result.structuredContent as { id: number }).id).toBe(FREE_MODEL.id);
+  });
+
+  it("appends a next-action hint when the user picks one from the elicitation", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: FREE_MODEL });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({
+        action: "accept",
+        content: { next: "images" },
+      }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_get_model",
+      arguments: { model_id: FREE_MODEL.id },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("cgtrader_get_model_images");
+    expect(
+      (result.structuredContent as { _next_action: string | null })._next_action,
+    ).toBe("images");
+  });
+
+  it("omits the hint when the user picks 'done'", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: FREE_MODEL });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({ action: "accept", content: { next: "done" } }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_get_model",
+      arguments: { model_id: FREE_MODEL.id },
+    });
+
+    expect(textOf(result)).not.toContain("User requested next action");
+    expect(
+      (result.structuredContent as { _next_action: string | null })._next_action,
+    ).toBeNull();
+  });
+
+  it("surfaces user notes from the follow-up form", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: FREE_MODEL });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({
+        action: "accept",
+        content: { next: "done", notes: "convert to STL for printing" },
+      }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_get_model",
+      arguments: { model_id: FREE_MODEL.id },
+    });
+
+    expect(textOf(result)).toContain("User added a note");
+    expect(textOf(result)).toContain("STL for printing");
+    expect(
+      (result.structuredContent as { _user_notes: string | null })._user_notes,
+    ).toBe("convert to STL for printing");
+  });
+
+  it("appends a decline hint when the user declines the follow-up", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ model: FREE_MODEL });
+    const client = await connectedClient({
+      elicitation: true,
+      responder: async () => ({ action: "decline" }),
+    });
+
+    const result = await client.callTool({
+      name: "cgtrader_get_model",
+      arguments: { model_id: FREE_MODEL.id },
+    });
+
+    expect(textOf(result)).toContain("User declined the refinement prompt");
   });
 
   it("rejects a paid model with a FreeOnlyViolation error", async () => {

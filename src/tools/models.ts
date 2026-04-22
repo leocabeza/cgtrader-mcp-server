@@ -8,6 +8,7 @@ import {
   CGTraderModelListResponse,
 } from "../types.js";
 import { apiGet, apiGetRaw, handleApiError } from "../services/client.js";
+import { elicitForm, type FormSchema } from "../services/elicit.js";
 import {
   FreeOnlyViolation,
   fetchFreeModelOrThrow,
@@ -75,6 +76,87 @@ const SearchModelsInputSchema = z
 
 type SearchModelsInput = z.infer<typeof SearchModelsInputSchema>;
 
+const COMMON_EXTENSIONS: Array<{ const: string; title: string }> = [
+  { const: "any", title: "No preference" },
+  { const: "obj", title: "Wavefront OBJ (.obj)" },
+  { const: "fbx", title: "Autodesk FBX (.fbx)" },
+  { const: "blend", title: "Blender (.blend)" },
+  { const: "stl", title: "STL (.stl) — for 3D printing" },
+  { const: "3ds", title: "3D Studio (.3ds)" },
+  { const: "max", title: "3ds Max (.max)" },
+  { const: "gltf", title: "glTF (.gltf/.glb)" },
+  { const: "dae", title: "Collada (.dae)" },
+];
+
+const POLYGON_OPTIONS: Array<{ const: string; title: string }> = [
+  { const: "any", title: "No preference" },
+  { const: "lt_5k", title: "Very simple (under 5k polys)" },
+  { const: "range_5k_10k", title: "Simple (5k–10k)" },
+  { const: "range_10k_50k", title: "Medium (10k–50k)" },
+  { const: "range_50k_100k", title: "Detailed (50k–100k)" },
+  { const: "range_100k_250k", title: "High-detail (100k–250k)" },
+  { const: "gt_250k", title: "Very high-detail (250k+)" },
+];
+
+const SORT_OPTIONS: Array<{ const: string; title: string }> = [
+  { const: "best_match", title: "Best match (default)" },
+  { const: "sales", title: "Most downloaded" },
+  { const: "newest", title: "Newest first" },
+  { const: "oldest", title: "Oldest first" },
+];
+
+function hasAnyRefinement(p: SearchModelsInput): boolean {
+  return (
+    p.polygons !== undefined ||
+    p.low_poly !== undefined ||
+    p.animated !== undefined ||
+    p.rigged !== undefined ||
+    p.pbr !== undefined ||
+    p.extensions !== undefined ||
+    p.product_type !== undefined
+  );
+}
+
+const SEARCH_REFINE_SCHEMA: FormSchema = {
+  type: "object",
+  properties: {
+    format: {
+      type: "string",
+      title: "Preferred file format",
+      oneOf: COMMON_EXTENSIONS,
+      default: "any",
+    },
+    complexity: {
+      type: "string",
+      title: "Model complexity",
+      oneOf: POLYGON_OPTIONS,
+      default: "any",
+    },
+    sort: {
+      type: "string",
+      title: "Sort results by",
+      oneOf: SORT_OPTIONS,
+      default: "best_match",
+    },
+    notes: {
+      type: "string",
+      title: "Anything else we should know? (optional)",
+      description:
+        "Free-text hint for the assistant — e.g. 'needs to open in Cinema 4D' or 'must be rigged for Unity'.",
+    },
+  },
+};
+
+type SearchRefineValues = {
+  format?: string;
+  complexity?: string;
+  sort?: string;
+  notes?: string;
+};
+
+const DECLINE_HINT =
+  "> **User declined the refinement prompt.** If they seem unsatisfied with the results below, re-prompt them in natural language to describe what they actually want.";
+
 function registerSearchModels(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_search_models",
@@ -122,25 +204,60 @@ Example:
     },
     async (params: SearchModelsInput) => {
       try {
+        let effective: SearchModelsInput = params;
+        let userNotes: string | null = null;
+        let userDeclined = false;
+        if (!hasAnyRefinement(params)) {
+          const outcome = await elicitForm<SearchRefineValues>(
+            server,
+            params.keywords
+              ? `Refine your search for "${params.keywords}" — pick any that matter, or submit as-is for best results.`
+              : "Refine the free-model search — pick any that matter, or submit as-is for best results.",
+            SEARCH_REFINE_SCHEMA,
+          );
+          if (outcome.status === "accepted") {
+            const v = outcome.values;
+            if (typeof v.notes === "string" && v.notes.trim() !== "") {
+              userNotes = v.notes.trim();
+            }
+            effective = {
+              ...params,
+              ...(v.format && v.format !== "any"
+                ? { extensions: v.format }
+                : {}),
+              ...(v.complexity && v.complexity !== "any"
+                ? { polygons: v.complexity as SearchModelsInput["polygons"] }
+                : {}),
+              ...(v.sort
+                ? { sort: v.sort as SearchModelsInput["sort"] }
+                : {}),
+            };
+          } else if (outcome.status === "declined") {
+            userDeclined = true;
+          }
+        }
+
         const apiParams: Record<string, unknown> = {
-          page: params.page,
-          per_page: params.per_page,
-          sort: params.sort,
-          adult_content: params.adult_content,
+          page: effective.page,
+          per_page: effective.per_page,
+          sort: effective.sort,
+          adult_content: effective.adult_content,
           // free-only enforcement:
           min_price: 0,
           max_price: 0,
         };
-        if (params.keywords) apiParams.keywords = params.keywords;
-        if (params.category_id !== undefined)
-          apiParams.category_id = params.category_id;
-        if (params.product_type) apiParams.product_type = params.product_type;
-        if (params.extensions) apiParams.extensions = params.extensions;
-        if (params.polygons) apiParams.polygons = params.polygons;
-        if (params.low_poly !== undefined) apiParams.low_poly = params.low_poly;
-        if (params.animated !== undefined) apiParams.animated = params.animated;
-        if (params.rigged !== undefined) apiParams.rigged = params.rigged;
-        if (params.pbr !== undefined) apiParams.pbr = params.pbr;
+        if (effective.keywords) apiParams.keywords = effective.keywords;
+        if (effective.category_id !== undefined)
+          apiParams.category_id = effective.category_id;
+        if (effective.product_type) apiParams.product_type = effective.product_type;
+        if (effective.extensions) apiParams.extensions = effective.extensions;
+        if (effective.polygons) apiParams.polygons = effective.polygons;
+        if (effective.low_poly !== undefined)
+          apiParams.low_poly = effective.low_poly;
+        if (effective.animated !== undefined)
+          apiParams.animated = effective.animated;
+        if (effective.rigged !== undefined) apiParams.rigged = effective.rigged;
+        if (effective.pbr !== undefined) apiParams.pbr = effective.pbr;
 
         const data = await apiGet<CGTraderModelListResponse>(
           env,
@@ -151,27 +268,43 @@ Example:
         // Defensive: drop anything the API returns that isn't actually free.
         const freeModels = (data.models ?? []).filter(isFreeModel);
         const total = data.total ?? freeModels.length;
-        const consumed = params.page * params.per_page;
+        const consumed = effective.page * effective.per_page;
         const has_more = total > consumed;
 
         const structured = {
           total,
           count: freeModels.length,
-          page: params.page,
-          per_page: params.per_page,
+          page: effective.page,
+          per_page: effective.per_page,
           has_more,
-          next_page: has_more ? params.page + 1 : null,
+          next_page: has_more ? effective.page + 1 : null,
           models: freeModels,
         };
 
-        const markdown = modelsToMarkdown("Free model search results", freeModels, {
-          page: params.page,
-          per_page: params.per_page,
-          total,
-          has_more,
-        });
+        const baseMarkdown = modelsToMarkdown(
+          "Free model search results",
+          freeModels,
+          {
+            page: effective.page,
+            per_page: effective.per_page,
+            total,
+            has_more,
+          },
+        );
+        const hintParts: string[] = [];
+        if (userNotes) {
+          hintParts.push(
+            `> **User added a note:** ${userNotes}\n>\n> Take this into account; if the results don't match, ask the user to clarify.`,
+          );
+        }
+        if (userDeclined) {
+          hintParts.push(DECLINE_HINT);
+        }
+        const markdown = hintParts.length
+          ? `${baseMarkdown}\n\n---\n\n${hintParts.join("\n\n")}`
+          : baseMarkdown;
 
-        const text = renderText(params.response_format, markdown, structured);
+        const text = renderText(effective.response_format, markdown, structured);
         return {
           content: [{ type: "text", text }],
           structuredContent: structured,
@@ -225,6 +358,35 @@ function modelToMarkdown(m: CGTraderModel): string {
   return lines.join("\n");
 }
 
+const NEXT_ACTION_SCHEMA: FormSchema = {
+  type: "object",
+  properties: {
+    next: {
+      type: "string",
+      title: "What next?",
+      oneOf: [
+        { const: "done", title: "Nothing — I'm done" },
+        { const: "images", title: "Show preview images" },
+        { const: "license", title: "Show license / usage terms" },
+        { const: "downloads", title: "Get download links" },
+      ],
+      default: "done",
+    },
+    notes: {
+      type: "string",
+      title: "Anything else? (optional)",
+      description:
+        "Free-text hint for the assistant — e.g. 'convert to STL for printing' or 'summarize the license'.",
+    },
+  },
+};
+
+const NEXT_ACTION_TOOL: Record<string, string> = {
+  images: "cgtrader_get_model_images",
+  license: "cgtrader_get_model_license",
+  downloads: "cgtrader_get_free_model_download_urls",
+};
+
 function registerGetModel(server: McpServer, env: Env) {
   server.registerTool(
     "cgtrader_get_model",
@@ -233,6 +395,8 @@ function registerGetModel(server: McpServer, env: Env) {
       description: `Fetch full details for a single CGTrader model by id.
 
 Rejects with an error if the model is not free (download price > 0). Use cgtrader_search_models to find free model ids first.
+
+On hosts that support MCP elicitation, this tool may ask the user a quick follow-up ("images / license / downloads / done"); the chosen action is surfaced as a hint so the agent can call the next tool immediately.
 
 Args:
   - model_id (number, required): CGTrader model id.
@@ -250,14 +414,53 @@ Returns: the full model object (id, title, author_name, url, category_id, subcat
     async (params: GetModelInput) => {
       try {
         const model = await fetchFreeModelOrThrow(env, params.model_id);
+        const baseMd = modelToMarkdown(model);
+
+        const outcome = await elicitForm<{ next?: string; notes?: string }>(
+          server,
+          `You fetched "${model.title ?? `model ${model.id}`}". What would you like next?`,
+          NEXT_ACTION_SCHEMA,
+        );
+
+        const hintLines: string[] = [];
+        let nextAction: string | null = null;
+        let userNotes: string | null = null;
+        if (outcome.status === "accepted") {
+          const choice = outcome.values.next;
+          if (choice && choice !== "done") {
+            const tool = NEXT_ACTION_TOOL[choice];
+            if (tool) {
+              nextAction = choice;
+              hintLines.push(
+                `**User requested next action:** ${choice}. Call \`${tool}\` with \`model_id=${model.id}\` to fulfill it.`,
+              );
+            }
+          }
+          const notes = outcome.values.notes;
+          if (typeof notes === "string" && notes.trim() !== "") {
+            userNotes = notes.trim();
+            hintLines.push(`**User added a note:** ${userNotes}`);
+          }
+        } else if (outcome.status === "declined") {
+          hintLines.push(DECLINE_HINT);
+        }
+
+        const hintMd = hintLines.length
+          ? `\n\n---\n\n${hintLines.join("\n\n")}`
+          : "";
+
         const text = renderText(
           params.response_format,
-          modelToMarkdown(model),
-          model,
+          baseMd + hintMd,
+          { ...model, _next_action: nextAction, _user_notes: userNotes },
         );
         return {
           content: [{ type: "text", text }],
-          structuredContent: model as unknown as Record<string, unknown>,
+          structuredContent: {
+            ...(model as unknown as Record<string, unknown>),
+            _next_action: nextAction,
+            _user_notes: userNotes,
+          },
         };
       } catch (error) {
         if (error instanceof FreeOnlyViolation) {

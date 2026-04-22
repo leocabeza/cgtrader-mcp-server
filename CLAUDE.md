@@ -41,3 +41,31 @@ This project authenticates to the CGTrader API (`https://api.cgtrader.com/v1/*`)
 
 - Startup fails (`src/index.ts:41`) if the token exchange fails — typically bad client id/secret, wrong token URL, or network/DNS issues.
 - `handleApiError` at `src/services/client.ts:67` maps 401 specifically to a message pointing at `CGTRADER_CLIENT_ID` / `CGTRADER_CLIENT_SECRET`, because after `withAuthRetry` a surfaced 401 means the freshly-minted token was itself rejected.
+
+## CGTrader REST API surface
+
+Public docs: <https://api.cgtrader.com/docs/index.html>. Base URL: `https://api.cgtrader.com/v1`. Full documented endpoint inventory (as of 2026-04, captured for quick reference so we don't need to re-fetch the docs):
+
+| Resource | Endpoints |
+| --- | --- |
+| **Models** | `GET /models` · `GET /models/:id` · `POST /models` · `PUT /models/:id` · `DELETE /models/:id` |
+| **Categories** | `GET /categories` · `GET /categories/:id` |
+| **Files** | `GET /models/:model_id/files` · `GET /models/:model_id/files/:id` (302 → S3 signed URL) · `POST /models/:model_id/files` · `DELETE /models/:model_id/files/:id` |
+| **Images** | `GET /models/:model_id/images` · `POST /models/:model_id/images` · `DELETE /models/:model_id/images/:id` |
+| **License** | `GET /models/:model_id/license` |
+| **File types** | `GET /file_types` · `GET /file_types/:id` |
+| **Orders** | `GET /orders` · `GET /orders/:id` · `POST /orders` (returns `checkout_url`) |
+| **Users** | `POST /users` · `GET /users/me` |
+
+This server only consumes the `GET` subset, scoped to free models (see free-guard logic in `src/services/free-guard.ts` and `README.md` lines 18–20). The mutating endpoints (`POST`/`PUT`/`DELETE` on models, files, images, orders, users) are documented here for completeness but are **not** callable with our `client_credentials` token — they require a user-authenticated token this server deliberately does not mint.
+
+### What the public API does not expose
+
+There is **no** endpoint for:
+
+- keyword search volume, search counts, or search analytics
+- trending / popular keywords
+- per-keyword or per-query history
+- any time-series / aggregate marketplace metrics
+
+The surface is strictly CRUD over models/files/images/orders/users plus the categories and file-types taxonomies. Any "how popular is search term X" question cannot be answered via this API; it would need an internal data source (warehouse / analytics pipeline) outside this server's scope.

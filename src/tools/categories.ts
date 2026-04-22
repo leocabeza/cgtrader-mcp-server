@@ -3,8 +3,40 @@ import { z } from "zod";
 import type { Env } from "../env.js";
 import { CGTraderCategory } from "../types.js";
 import { apiGet, handleApiError } from "../services/client.js";
+import { elicitForm, type FormSchema } from "../services/elicit.js";
 import { renderText } from "../services/format.js";
 import { categoryIdField, responseFormatField } from "../schemas/common.js";
+
+const MAX_PICKER_OPTIONS = 20;
+
+function isTopLevel(c: { parent_id?: number | null }): boolean {
+  return c.parent_id === undefined || c.parent_id === null;
+}
+
+function collectSubtree(
+  root: number,
+  all: CGTraderCategory[],
+): CGTraderCategory[] {
+  const childrenOf = new Map<number, CGTraderCategory[]>();
+  for (const c of all) {
+    const p = c.parent_id;
+    if (p === undefined || p === null) continue;
+    if (!childrenOf.has(p)) childrenOf.set(p, []);
+    childrenOf.get(p)!.push(c);
+  }
+  const out: CGTraderCategory[] = [];
+  const rootNode = all.find((c) => c.id === root);
+  if (rootNode) out.push(rootNode);
+  const stack = [root];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    for (const child of childrenOf.get(id) ?? []) {
+      out.push(child);
+      stack.push(child.id);
+    }
+  }
+  return out;
+}
 
 const ListCategoriesInputSchema = z
   .object({
@@ -40,17 +72,101 @@ Returns: { count, categories: [{ id, name, slug, parent_id, ... }] }.`,
         const data = await apiGet<
           { categories?: CGTraderCategory[] } | CGTraderCategory[]
         >(env, "/categories");
-        const categories: CGTraderCategory[] = Array.isArray(data)
+        const allCategories: CGTraderCategory[] = Array.isArray(data)
           ? data
           : (data.categories ?? []);
-        const structured = { count: categories.length, categories };
+
+        // Offer a drill-in picker on hosts that support elicitation. User
+        // picks a top-level category → we narrow the returned list to that
+        // subtree. Decline/unsupported → full list as before.
+        const topLevel = allCategories
+          .filter(isTopLevel)
+          .slice(0, MAX_PICKER_OPTIONS);
+        let filtered: CGTraderCategory[] = allCategories;
+        let pickedId: number | null = null;
+        let userNotes: string | null = null;
+        let userDeclined = false;
+        if (topLevel.length >= 2) {
+          const pickerSchema: FormSchema = {
+            type: "object",
+            properties: {
+              category: {
+                type: "string",
+                title: "Drill into a category (optional)",
+                oneOf: [
+                  { const: "all", title: "Show me everything" },
+                  ...topLevel.map((c) => ({
+                    const: String(c.id),
+                    title: c.name ?? `Category ${c.id}`,
+                  })),
+                ],
+                default: "all",
+              },
+              notes: {
+                type: "string",
+                title: "Looking for something specific? (optional)",
+                description:
+                  "Free-text hint for the assistant — e.g. 'actually I want subcategories of cars'.",
+              },
+            },
+          };
+          const outcome = await elicitForm<{
+            category?: string;
+            notes?: string;
+          }>(
+            server,
+            "Browsing CGTrader categories — pick a top-level category to drill into, or 'Show me everything'.",
+            pickerSchema,
+          );
+          if (outcome.status === "accepted") {
+            if (
+              outcome.values.category &&
+              outcome.values.category !== "all"
+            ) {
+              const id = Number(outcome.values.category);
+              if (Number.isFinite(id)) {
+                pickedId = id;
+                filtered = collectSubtree(id, allCategories);
+              }
+            }
+            const notes = outcome.values.notes;
+            if (typeof notes === "string" && notes.trim() !== "") {
+              userNotes = notes.trim();
+            }
+          } else if (outcome.status === "declined") {
+            userDeclined = true;
+          }
+        }
+
+        const structured = {
+          count: filtered.length,
+          total: allCategories.length,
+          category_id: pickedId,
+          categories: filtered,
+          _user_notes: userNotes,
+        };
+        const heading = pickedId
+          ? `# CGTrader categories under id ${pickedId} (${filtered.length} of ${allCategories.length})`
+          : `# CGTrader categories (${filtered.length})`;
+        const hintLines: string[] = [];
+        if (userNotes) {
+          hintLines.push(
+            `> **User added a note:** ${userNotes}\n>\n> Take this into account; if the results don't match, ask the user to clarify.`,
+          );
+        }
+        if (userDeclined) {
+          hintLines.push(
+            "> **User declined the category picker.** If they seem unsatisfied, re-prompt them in natural language to describe what they're looking for.",
+          );
+        }
         const md = [
-          `# CGTrader categories (${categories.length})`,
+          heading,
           "",
-          ...categories.map(
+          ...filtered.map(
             (c) =>
               `- **${c.name ?? `(unnamed)`}** (id: ${c.id}${c.parent_id ? `, parent: ${c.parent_id}` : ""})${c.slug ? ` — \`${c.slug}\`` : ""}`,
           ),
+          ...(hintLines.length ? ["", "---", "", hintLines.join("\n\n")] : []),
         ].join("\n");
         const text = renderText(params.response_format, md, structured);
         return {

@@ -66,11 +66,6 @@ export type ModelDetailDeps = {
 export type ModelDetailHandle = {
   /** Tear down listeners; caller should clear the container itself if desired. */
   destroy: () => void;
-  /**
-   * Patch the view with full data after the initial render was seeded with
-   * partial data (opts.pending = true). No-op after destroy().
-   */
-  update: (data: ViewModelResult) => void;
 };
 
 /**
@@ -78,22 +73,20 @@ export type ModelDetailHandle = {
  * removed) and wires the CTAs using the supplied deps. Returns a handle so
  * callers can dispose of it when swapping views.
  *
- * Pass `opts.pending = true` when `data` is a seed (e.g. the Model from a
- * listing row, before /models/:id has resolved). Fields not yet known
- * (description, files, license, server images) render as shimmer skeletons;
- * calling `handle.update(full)` patches them in place.
- *
- * With `pending = false` (the default), absent fields are treated as genuinely
- * absent and the corresponding sections/facts are hidden.
+ * Deps (callServerTool, openLink) typically come from an `App` instance —
+ * passing them in rather than importing the App keeps this module usable from
+ * either the standalone detail UI or an overlay inside another UI.
  */
 export function renderModelDetail(
   container: HTMLElement,
   data: ViewModelResult,
   deps: ModelDetailDeps,
-  opts?: { pending?: boolean },
 ): ModelDetailHandle {
   clearChildren(container);
   container.classList.add("detail");
+
+  const model = data.model;
+  const images = data.images ?? [];
 
   // ── gallery ───────────────────────────────────────────────────────────
   const gallery = document.createElement("div");
@@ -127,137 +120,22 @@ export function renderModelDetail(
   gallery.appendChild(galleryMain);
   gallery.appendChild(thumbStrip);
 
-  // ── meta ──────────────────────────────────────────────────────────────
-  const meta = document.createElement("div");
-  meta.className = "meta";
-
-  const titleEl = document.createElement("h1");
-  titleEl.className = "title";
-  meta.appendChild(titleEl);
-
-  const authorEl = document.createElement("div");
-  authorEl.className = "author";
-  authorEl.hidden = true;
-  meta.appendChild(authorEl);
-
-  const chipsEl = document.createElement("div");
-  chipsEl.className = "chips";
-  meta.appendChild(chipsEl);
-
-  const factsEl = document.createElement("dl");
-  factsEl.className = "facts";
-  meta.appendChild(factsEl);
-
-  // ── CTAs ──────────────────────────────────────────────────────────────
-  const ctaRow = document.createElement("div");
-  ctaRow.className = "cta-row";
-
-  const downloadBtn = document.createElement("button");
-  downloadBtn.type = "button";
-  downloadBtn.className = "cta primary";
-  downloadBtn.textContent = "Get free download";
-  ctaRow.appendChild(downloadBtn);
-
-  const previewBtn = document.createElement("button");
-  previewBtn.type = "button";
-  previewBtn.className = "cta secondary";
-  previewBtn.textContent = "See preview";
-  if (!deps.mountPreview) {
-    // Host bundle opted out of the viewer (e.g. the search grid keeps its
-    // bundle lean). Hide the CTA entirely rather than showing a dead button.
-    previewBtn.hidden = true;
-  }
-  ctaRow.appendChild(previewBtn);
-
-  const externalBtn = document.createElement("button");
-  externalBtn.type = "button";
-  externalBtn.className = "cta secondary";
-  externalBtn.textContent = "See on CGTrader";
-  ctaRow.appendChild(externalBtn);
-
-  meta.appendChild(ctaRow);
-
-  // ── preview panel (hidden until user clicks "See preview") ────────────
-  const previewSection = document.createElement("section");
-  previewSection.className = "preview-panel";
-  previewSection.hidden = true;
-  const previewHeader = document.createElement("div");
-  previewHeader.className = "preview-header";
-  const previewTitleEl = document.createElement("div");
-  previewTitleEl.className = "preview-title";
-  previewTitleEl.textContent = "3D preview";
-  const previewStatus = document.createElement("div");
-  previewStatus.className = "preview-status";
-  const previewBackBtn = document.createElement("button");
-  previewBackBtn.type = "button";
-  previewBackBtn.className = "cta secondary";
-  previewBackBtn.textContent = "Close preview";
-  previewHeader.appendChild(previewTitleEl);
-  previewHeader.appendChild(previewStatus);
-  previewHeader.appendChild(previewBackBtn);
-  const previewStage = document.createElement("div");
-  previewStage.className = "preview-stage";
-  previewSection.appendChild(previewHeader);
-  previewSection.appendChild(previewStage);
-
-  // ── description ───────────────────────────────────────────────────────
-  const descSection = document.createElement("section");
-  descSection.className = "description";
-  const descHeading = document.createElement("h2");
-  descHeading.textContent = "Description";
-  const descBody = document.createElement("div");
-  descBody.className = "description-body";
-  descSection.appendChild(descHeading);
-  descSection.appendChild(descBody);
-
-  // ── downloads panel (populated on demand) ─────────────────────────────
-  const downloadsSection = document.createElement("section");
-  downloadsSection.className = "downloads";
-  downloadsSection.hidden = true;
-  const dlHeader = document.createElement("h2");
-  dlHeader.textContent = "Download links";
-  const dlList = document.createElement("ul");
-  dlList.className = "download-list";
-  const dlHint = document.createElement("p");
-  dlHint.className = "hint";
-  downloadsSection.appendChild(dlHeader);
-  downloadsSection.appendChild(dlList);
-  downloadsSection.appendChild(dlHint);
-
-  // Full-width rows below the gallery/meta grid row. The preview panel, the
-  // description, and the downloads panel each span `grid-column: 1 / -1` so
-  // prose can breathe and short descriptions don't leave a void next to the
-  // gallery.
-  container.appendChild(gallery);
-  container.appendChild(meta);
-  container.appendChild(previewSection);
-  container.appendChild(descSection);
-  container.appendChild(downloadsSection);
-
-  // ── mutable state + renderers ─────────────────────────────────────────
-  let pending = opts?.pending ?? false;
-  let galleryUrls: string[] = [];
+  const galleryUrls = buildGalleryUrls(model, images);
   let galleryIndex = 0;
-  let canPreview = false;
-  let disposed = false;
-  let previewDisposer: PreviewDisposer | null = null;
-  let currentModel: Model = data.model;
 
   const renderGallery = (): void => {
     if (galleryUrls.length === 0) {
       hero.removeAttribute("src");
-      hero.alt = pending ? "" : "No preview images";
-      galleryMain.classList.toggle("skeleton", pending);
+      hero.alt = "No preview images";
       prevBtn.disabled = true;
       nextBtn.disabled = true;
       clearChildren(thumbStrip);
       return;
     }
-    galleryMain.classList.remove("skeleton");
     galleryIndex = Math.max(0, Math.min(galleryIndex, galleryUrls.length - 1));
     hero.src = galleryUrls[galleryIndex];
-    hero.alt = currentModel.title
-      ? `${currentModel.title} — preview ${galleryIndex + 1}`
+    hero.alt = model.title
+      ? `${model.title} — preview ${galleryIndex + 1}`
       : `Preview ${galleryIndex + 1}`;
     prevBtn.disabled = galleryIndex === 0;
     nextBtn.disabled = galleryIndex === galleryUrls.length - 1;
@@ -292,80 +170,170 @@ export function renderModelDetail(
   prevBtn.addEventListener("click", onPrev);
   nextBtn.addEventListener("click", onNext);
 
-  // Merges thumbnails + server images and preserves the user's current hero
-  // across updates (so seed → full doesn't jump the view off whatever they
-  // were already looking at).
-  const applyGallery = (model: Model, images: Image[]): void => {
-    const prevUrl = galleryUrls[galleryIndex];
-    galleryUrls = buildGalleryUrls(model, images);
-    if (prevUrl) {
-      const idx = galleryUrls.indexOf(prevUrl);
-      if (idx >= 0) galleryIndex = idx;
-    }
-    renderGallery();
+  // ── meta ──────────────────────────────────────────────────────────────
+  const meta = document.createElement("div");
+  meta.className = "meta";
+
+  const title = document.createElement("h1");
+  title.className = "title";
+  title.textContent = model.title ?? `Model ${model.id}`;
+  meta.appendChild(title);
+
+  if (model.author_name) {
+    const author = document.createElement("div");
+    author.className = "author";
+    author.textContent = `by ${model.author_name}`;
+    meta.appendChild(author);
+  }
+
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  chips.appendChild(makeChip("Free", "free"));
+  if (model.animated) chips.appendChild(makeChip("Animated"));
+  if (model.rigged) chips.appendChild(makeChip("Rigged"));
+  if (model.game_ready) chips.appendChild(makeChip("Game-ready"));
+  for (const ext of (model.availableFileExtensions ?? []).slice(0, 6)) {
+    chips.appendChild(makeChip(ext));
+  }
+  meta.appendChild(chips);
+
+  const facts = document.createElement("dl");
+  facts.className = "facts";
+  const addFact = (key: string, value: string | number | undefined): void => {
+    if (value === undefined || value === null || value === "") return;
+    const dt = document.createElement("dt");
+    dt.textContent = key;
+    const dd = document.createElement("dd");
+    dd.textContent = String(value);
+    facts.appendChild(dt);
+    facts.appendChild(dd);
   };
+  if (model.license) addFact("License", licenseLabel(model.license));
+  if (model.category_id !== undefined) addFact("Category id", model.category_id);
+  if (model.files?.length) addFact("Files", model.files.length);
+  if (model.tags?.length) addFact("Tags", model.tags.slice(0, 12).join(", "));
+  meta.appendChild(facts);
 
-  const applyMeta = (model: Model): void => {
-    titleEl.textContent = model.title ?? `Model ${model.id}`;
-    if (model.author_name) {
-      authorEl.textContent = `by ${model.author_name}`;
-      authorEl.hidden = false;
-    } else {
-      authorEl.hidden = true;
-    }
+  // ── CTAs ──────────────────────────────────────────────────────────────
+  const ctaRow = document.createElement("div");
+  ctaRow.className = "cta-row";
 
-    clearChildren(chipsEl);
-    chipsEl.appendChild(makeChip("Free", "free"));
-    if (model.animated) chipsEl.appendChild(makeChip("Animated"));
-    if (model.rigged) chipsEl.appendChild(makeChip("Rigged"));
-    if (model.game_ready) chipsEl.appendChild(makeChip("Game-ready"));
-    for (const ext of (model.availableFileExtensions ?? []).slice(0, 6)) {
-      chipsEl.appendChild(makeChip(ext));
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "cta primary";
+  downloadBtn.textContent = "Get free download";
+  downloadBtn.disabled = !(model.files && model.files.length > 0);
+  ctaRow.appendChild(downloadBtn);
+
+  const previewBtn = document.createElement("button");
+  previewBtn.type = "button";
+  previewBtn.className = "cta secondary";
+  previewBtn.textContent = "See preview";
+  const canPreview = hasPreviewableExtension(model) && !!deps.mountPreview;
+  previewBtn.disabled = !canPreview;
+  if (!deps.mountPreview) {
+    // Host bundle opted out of the viewer (e.g. the search grid keeps its
+    // bundle lean). Hide the CTA entirely rather than showing a dead button.
+    previewBtn.hidden = true;
+  } else if (!canPreview) {
+    previewBtn.title =
+      "No web-viewable file on this model (needs glb, fbx, obj, stl, or gltf).";
+  }
+  ctaRow.appendChild(previewBtn);
+
+  const externalBtn = document.createElement("button");
+  externalBtn.type = "button";
+  externalBtn.className = "cta secondary";
+  externalBtn.textContent = "See on CGTrader";
+  ctaRow.appendChild(externalBtn);
+
+  meta.appendChild(ctaRow);
+
+  // ── preview panel (hidden until user clicks "See preview") ────────────
+  const previewSection = document.createElement("section");
+  previewSection.className = "preview-panel";
+  previewSection.hidden = true;
+  const previewHeader = document.createElement("div");
+  previewHeader.className = "preview-header";
+  const previewTitle = document.createElement("div");
+  previewTitle.className = "preview-title";
+  previewTitle.textContent = "3D preview";
+  const previewStatus = document.createElement("div");
+  previewStatus.className = "preview-status";
+  const previewBackBtn = document.createElement("button");
+  previewBackBtn.type = "button";
+  previewBackBtn.className = "cta secondary";
+  previewBackBtn.textContent = "Close preview";
+  previewHeader.appendChild(previewTitle);
+  previewHeader.appendChild(previewStatus);
+  previewHeader.appendChild(previewBackBtn);
+  const previewStage = document.createElement("div");
+  previewStage.className = "preview-stage";
+  previewSection.appendChild(previewHeader);
+  previewSection.appendChild(previewStage);
+
+  // ── description (optional) ────────────────────────────────────────────
+  const descFrag = model.description
+    ? buildDescriptionFragment(model.description)
+    : null;
+  const descSection = document.createElement("section");
+  descSection.className = "description";
+  let descBody: HTMLDivElement | null = null;
+  if (descFrag) {
+    const h = document.createElement("h2");
+    h.textContent = "Description";
+    descBody = document.createElement("div");
+    descBody.className = "description-body";
+    descBody.appendChild(descFrag);
+    descSection.appendChild(h);
+    descSection.appendChild(descBody);
+  } else {
+    descSection.hidden = true;
+  }
+
+  // ── downloads panel (populated on demand) ─────────────────────────────
+  const downloadsSection = document.createElement("section");
+  downloadsSection.className = "downloads";
+  downloadsSection.hidden = true;
+  const dlHeader = document.createElement("h2");
+  dlHeader.textContent = "Download links";
+  const dlList = document.createElement("ul");
+  dlList.className = "download-list";
+  const dlHint = document.createElement("p");
+  dlHint.className = "hint";
+  downloadsSection.appendChild(dlHeader);
+  downloadsSection.appendChild(dlList);
+  downloadsSection.appendChild(dlHint);
+
+  // Full-width rows below the gallery/meta grid row. The preview panel, the
+  // description, and the downloads panel each span `grid-column: 1 / -1` so
+  // prose can breathe and short descriptions don't leave a void next to the
+  // gallery.
+  container.appendChild(gallery);
+  container.appendChild(meta);
+  container.appendChild(previewSection);
+  container.appendChild(descSection);
+  container.appendChild(downloadsSection);
+
+  renderGallery();
+
+  // ── CTA handlers ──────────────────────────────────────────────────────
+  const externalUrl =
+    safeHttpUrl(model.url) ??
+    `https://www.cgtrader.com/3d-models/${model.id ?? 0}`;
+
+  const onExternal = async (): Promise<void> => {
+    try {
+      await deps.openLink({ url: externalUrl });
+    } catch (e) {
+      console.error("openLink failed", e);
+      window.open(externalUrl, "_blank", "noopener,noreferrer");
     }
   };
+  externalBtn.addEventListener("click", onExternal);
 
-  const applyFacts = (model: Model): void => {
-    clearChildren(factsEl);
-    const addFact = (key: string, value: string | number): void => {
-      const dt = document.createElement("dt");
-      dt.textContent = key;
-      const dd = document.createElement("dd");
-      dd.textContent = String(value);
-      factsEl.appendChild(dt);
-      factsEl.appendChild(dd);
-    };
-    const addSkeletonFact = (key: string): void => {
-      const dt = document.createElement("dt");
-      dt.textContent = key;
-      const dd = document.createElement("dd");
-      const line = document.createElement("span");
-      line.className = "skeleton-line skeleton-fact";
-      dd.appendChild(line);
-      factsEl.appendChild(dt);
-      factsEl.appendChild(dd);
-    };
-
-    if (model.license) {
-      addFact("License", licenseLabel(model.license));
-    } else if (pending) {
-      addSkeletonFact("License");
-    }
-    if (model.category_id !== undefined) {
-      addFact("Category id", model.category_id);
-    }
-    if (model.files?.length) {
-      addFact("Files", model.files.length);
-    } else if (pending && model.files === undefined) {
-      addSkeletonFact("Files");
-    }
-    if (model.tags?.length) {
-      addFact("Tags", model.tags.slice(0, 12).join(", "));
-    }
-  };
-
-  // Description click handler routes anchors through deps.openLink (so hosts
-  // like Claude Desktop that intercept external nav stay in charge). Attached
-  // once; survives description body swaps across update().
+  // Route anchors embedded in the description through deps.openLink so hosts
+  // (Claude Desktop, etc.) that intercept external navigation stay in charge.
   const onDescriptionClick = (e: Event): void => {
     const anchor = (e.target as Element | null)?.closest?.("a");
     if (!anchor) return;
@@ -376,89 +344,7 @@ export function renderModelDetail(
       .openLink({ url: href })
       .catch((err) => console.error("openLink failed", err));
   };
-  descBody.addEventListener("click", onDescriptionClick);
-
-  const applyDescription = (model: Model): void => {
-    clearChildren(descBody);
-    if (model.description) {
-      const frag = buildDescriptionFragment(model.description);
-      if (frag) {
-        descSection.hidden = false;
-        descBody.appendChild(frag);
-        return;
-      }
-    }
-    if (pending && model.description === undefined) {
-      descSection.hidden = false;
-      for (let i = 0; i < 3; i++) {
-        const line = document.createElement("div");
-        line.className = "skeleton-line";
-        descBody.appendChild(line);
-      }
-      return;
-    }
-    descSection.hidden = true;
-  };
-
-  const applyCtaState = (model: Model): void => {
-    const filesUnknown = pending && model.files === undefined;
-
-    if (filesUnknown) {
-      downloadBtn.disabled = true;
-      downloadBtn.classList.add("loading");
-    } else {
-      downloadBtn.classList.remove("loading");
-      downloadBtn.disabled = !(model.files && model.files.length > 0);
-    }
-
-    canPreview = hasPreviewableExtension(model) && !!deps.mountPreview;
-    if (!deps.mountPreview) {
-      previewBtn.hidden = true;
-      return;
-    }
-    previewBtn.hidden = false;
-    if (filesUnknown) {
-      previewBtn.disabled = true;
-      previewBtn.classList.add("loading");
-      previewBtn.removeAttribute("title");
-    } else {
-      previewBtn.classList.remove("loading");
-      previewBtn.disabled = !canPreview;
-      if (canPreview) {
-        previewBtn.removeAttribute("title");
-      } else {
-        previewBtn.title =
-          "No web-viewable file on this model (needs glb, fbx, obj, stl, or gltf).";
-      }
-    }
-  };
-
-  const applyAll = (model: Model, images: Image[]): void => {
-    currentModel = model;
-    applyMeta(model);
-    applyFacts(model);
-    applyDescription(model);
-    applyCtaState(model);
-    applyGallery(model, images);
-  };
-
-  applyAll(data.model, data.images ?? []);
-
-  // ── CTA handlers ──────────────────────────────────────────────────────
-  const externalUrlFor = (model: Model): string =>
-    safeHttpUrl(model.url) ??
-    `https://www.cgtrader.com/3d-models/${model.id ?? 0}`;
-
-  const onExternal = async (): Promise<void> => {
-    const externalUrl = externalUrlFor(currentModel);
-    try {
-      await deps.openLink({ url: externalUrl });
-    } catch (e) {
-      console.error("openLink failed", e);
-      window.open(externalUrl, "_blank", "noopener,noreferrer");
-    }
-  };
-  externalBtn.addEventListener("click", onExternal);
+  if (descBody) descBody.addEventListener("click", onDescriptionClick);
 
   const renderDownloads = (result: DownloadResult): void => {
     clearChildren(dlList);
@@ -505,7 +391,7 @@ export function renderModelDetail(
     try {
       const res = await deps.callServerTool({
         name: "cgtrader_get_free_model_download_urls",
-        arguments: { model_id: currentModel.id },
+        arguments: { model_id: model.id },
       });
       if (res.isError) {
         showDownloadError(
@@ -528,15 +414,14 @@ export function renderModelDetail(
         e instanceof Error ? e.message : "Failed to fetch download links.",
       );
     } finally {
-      downloadBtn.disabled = !(
-        currentModel.files && currentModel.files.length > 0
-      );
+      downloadBtn.disabled = !(model.files && model.files.length > 0);
       downloadBtn.textContent = "Get free download";
     }
   };
   downloadBtn.addEventListener("click", onDownload);
 
   // ── preview CTA handler ───────────────────────────────────────────────
+  let previewDisposer: PreviewDisposer | null = null;
   const mountPreview = deps.mountPreview;
 
   const closePreview = (): void => {
@@ -559,7 +444,7 @@ export function renderModelDetail(
     try {
       const res = await deps.callServerTool({
         name: "cgtrader_preview_model_3d",
-        arguments: { model_id: currentModel.id },
+        arguments: { model_id: model.id },
       });
       const payload = res.structuredContent as PreviewResult | undefined;
       if (!payload || !payload.picked) {
@@ -596,21 +481,15 @@ export function renderModelDetail(
 
   return {
     destroy() {
-      disposed = true;
       prevBtn.removeEventListener("click", onPrev);
       nextBtn.removeEventListener("click", onNext);
       externalBtn.removeEventListener("click", onExternal);
       downloadBtn.removeEventListener("click", onDownload);
       previewBtn.removeEventListener("click", onPreview);
       previewBackBtn.removeEventListener("click", closePreview);
-      descBody.removeEventListener("click", onDescriptionClick);
+      descBody?.removeEventListener("click", onDescriptionClick);
       previewDisposer?.();
       previewDisposer = null;
-    },
-    update(next: ViewModelResult) {
-      if (disposed) return;
-      pending = false;
-      applyAll(next.model, next.images ?? []);
     },
   };
 }

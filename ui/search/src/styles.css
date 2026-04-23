@@ -33,8 +33,7 @@ body {
 }
 
 .fullscreen-btn,
-.pager button,
-.back-btn {
+.pager button {
   background: var(--color-background-secondary, #f3f3f3);
   color: var(--color-text-primary, #111);
   border: 1px solid var(--color-border-primary, #ddd);
@@ -45,8 +44,7 @@ body {
 }
 
 .fullscreen-btn:hover,
-.pager button:not(:disabled):hover,
-.back-btn:hover {
+.pager button:not(:disabled):hover {
   background: var(--color-background-tertiary, #ebebeb);
 }
 

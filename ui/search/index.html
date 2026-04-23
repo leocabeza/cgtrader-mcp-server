@@ -8,22 +8,12 @@
   <body>
     <main class="app" id="app">
       <header class="toolbar">
-        <button
-          type="button"
-          class="back-btn"
-          id="back-btn"
-          hidden
-          aria-label="Back to results"
-        >
-          ← Back to results
-        </button>
         <div class="summary" id="summary">Waiting for results…</div>
         <button type="button" class="fullscreen-btn" id="fullscreen-btn" hidden>
           Fullscreen
         </button>
       </header>
       <section class="grid" id="grid"></section>
-      <section id="detail-container" class="detail-overlay" hidden></section>
       <div class="loader" id="loader" hidden aria-live="polite" aria-busy="true">
         <div class="spinner" aria-hidden="true"></div>
         <div class="loader-label">Searching CGTrader…</div>

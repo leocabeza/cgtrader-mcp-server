@@ -293,9 +293,13 @@ const DECLINE_HINT =
 // (renders detail inline via app.callServerTool). If the agent auto-invokes
 // cgtrader_view_model here — e.g. to "highlight a recommendation" — the user
 // ends up with two detail cards stacked in the chat: one from the inline
-// click and one stranded underneath.
-const NO_AUTO_VIEW_HINT =
-  "> **DO NOT call `cgtrader_view_model` as a follow-up to this search.** The grid above is interactive — the user will click a card, and the UI will render the detail inline. Auto-invoking `cgtrader_view_model` leaves a stranded detail card below the grid when the user then clicks. If you want to summarize a specific model yourself in text, use `cgtrader_get_model` instead (it returns markdown, no card).";
+// click and one stranded underneath. Similarly, re-running search_models
+// with tighter filters before the user has even looked at the grid wastes
+// time and produces a second near-duplicate widget.
+const POST_SEARCH_HINT = [
+  "> **DO NOT call `cgtrader_view_model` as a follow-up to this search.** The grid above is interactive — the user will click a card and the UI renders the detail inline. Auto-invoking `cgtrader_view_model` leaves a stranded detail card below the grid when the user then clicks. If you want to summarize a specific model yourself in text, use `cgtrader_get_model` instead (it returns markdown, no card).",
+  "> **DO NOT call `cgtrader_search_models` again in this turn.** The grid above is the answer — present it to the user and let them refine via the in-iframe controls or a follow-up prompt. Do not chain a second search with narrower keywords/filters; that just produces a duplicate widget.",
+].join("\n\n");
 
 function buildSearchParams(p: SearchModelsInput): Record<string, unknown> {
   const apiParams: Record<string, unknown> = {
@@ -329,6 +333,8 @@ function registerSearchModels(server: McpServer, env: Env) {
       description: `Search the CGTrader marketplace for FREE 3D models (price = 0).
 
 This server only exposes free content; the price filter is enforced server-side (max_price=0) and cannot be overridden.
+
+CALL EXACTLY ONCE per user turn. Compose ALL filters you can infer from the user's prompt in that single call — do not issue a broad search first and then a narrow refinement (e.g. do NOT call once with \`keywords="character"\` and then again with \`keywords="low poly humanoid character rigged"\`). The UI already renders an interactive grid + an in-iframe refinement form, so the user — not the agent — drives any re-query. If the first result set looks off, SHOW IT to the user and ask what to narrow, instead of silently re-searching.
 
 Args:
   - keywords (string, optional): Free-text search query.
@@ -454,7 +460,7 @@ Example:
             has_more,
           },
         );
-        const hintParts: string[] = [NO_AUTO_VIEW_HINT];
+        const hintParts: string[] = [POST_SEARCH_HINT];
         if (userNotes) {
           hintParts.push(
             `> **User added a note:** ${userNotes}\n>\n> Take this into account; if the results don't match, ask the user to clarify.`,

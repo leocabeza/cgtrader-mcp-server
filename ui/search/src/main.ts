@@ -5,7 +5,6 @@ import { clearChildren, makeChip, safeHttpUrl } from "../../shared/dom.ts";
 import { applyHostContext } from "../../shared/host-context.ts";
 import {
   renderModelDetail,
-  type ModelDetailDeps,
   type ModelDetailHandle,
 } from "../../shared/model-detail.ts";
 import { mountPreview } from "../../shared/preview.ts";
@@ -46,9 +45,6 @@ let currentResult: SearchResult | null = null;
 let displayMode: "inline" | "fullscreen" | string = "inline";
 let detailHandle: ModelDetailHandle | null = null;
 let lastSummary = "";
-// Keyed by model id. Lets back→same-card be instant and lets the optimistic
-// path skip the seed render entirely when we already have the full data.
-const viewCache = new Map<number, ViewModelResult>();
 
 function setLoading(on: boolean, label?: string): void {
   root.classList.toggle("loading", on);
@@ -210,53 +206,17 @@ function showDetail(): void {
 }
 
 async function openDetail(m: Model): Promise<void> {
+  const title = m.title ?? `model ${m.id}`;
   showDetail();
-  detailHandle?.destroy();
+  clearChildren(detailContainerEl);
   detailContainerEl.classList.remove("detail");
-
-  const deps: ModelDetailDeps = {
-    callServerTool: (p) => app.callServerTool(p),
-    openLink: (p) => app.openLink(p),
-    mountPreview: async ({ container, data, onStatus }) => {
-      if (!data.picked) throw new Error("No preview candidate.");
-      const mounted = await mountPreview({
-        container,
-        url: data.picked.download_url,
-        format: data.picked.extension as SupportedFormat,
-        name: data.picked.name,
-        onStatus,
-      });
-      return () => mounted.dispose();
-    },
-  };
-
-  // Warm-cache path: we already have the full view_model payload from a
-  // previous open. Render directly, skip the seed + spinner.
-  const cached = viewCache.get(m.id);
-  if (cached) {
-    detailHandle = renderModelDetail(detailContainerEl, cached, deps);
-    summaryEl.textContent = `Free model · id ${cached.model.id}`;
-    return;
-  }
-
-  // Cold path: paint the detail view immediately from the listing row. The
-  // description, files-dependent CTAs, license fact, and server images arrive
-  // via handle.update() below and replace their skeletons in place.
-  const seed: ViewModelResult = { model: m, images: [] };
-  detailHandle = renderModelDetail(detailContainerEl, seed, deps, {
-    pending: true,
-  });
-  const myHandle = detailHandle;
-  summaryEl.textContent = `Free model · id ${m.id}`;
+  setLoading(true, `Opening "${title}"…`);
 
   try {
     const res = await app.callServerTool({
       name: "cgtrader_view_model",
       arguments: { model_id: m.id },
     });
-    // User went back to the grid or opened another card mid-fetch — drop the
-    // result on the floor, the new render owns the container now.
-    if (detailHandle !== myHandle) return;
     const structured = res.structuredContent as ViewModelResult | undefined;
     if (!structured?.model) {
       summaryEl.textContent =
@@ -265,14 +225,28 @@ async function openDetail(m: Model): Promise<void> {
           : "Couldn't load model details.";
       return;
     }
-    viewCache.set(m.id, structured);
-    myHandle.update(structured);
+    detailHandle = renderModelDetail(detailContainerEl, structured, {
+      callServerTool: (p) => app.callServerTool(p),
+      openLink: (p) => app.openLink(p),
+      mountPreview: async ({ container, data, onStatus }) => {
+        if (!data.picked) throw new Error("No preview candidate.");
+        const mounted = await mountPreview({
+          container,
+          url: data.picked.download_url,
+          format: data.picked.extension as SupportedFormat,
+          name: data.picked.name,
+          onStatus,
+        });
+        return () => mounted.dispose();
+      },
+    });
+    summaryEl.textContent = `Free model · id ${structured.model.id}`;
   } catch (e) {
     console.error("cgtrader_view_model failed", e);
-    if (detailHandle === myHandle) {
-      summaryEl.textContent =
-        e instanceof Error ? e.message : "Couldn't load model details.";
-    }
+    summaryEl.textContent =
+      e instanceof Error ? e.message : "Couldn't load model details.";
+  } finally {
+    setLoading(false);
   }
 }
 

@@ -289,6 +289,14 @@ type SearchRefineValues = {
 const DECLINE_HINT =
   "> **User declined the refinement prompt.** If they seem unsatisfied with the results below, re-prompt them in natural language to describe what they actually want.";
 
+// Emitted on every search result. The grid UI handles card clicks itself
+// (renders detail inline via app.callServerTool). If the agent auto-invokes
+// cgtrader_view_model here — e.g. to "highlight a recommendation" — the user
+// ends up with two detail cards stacked in the chat: one from the inline
+// click and one stranded underneath.
+const NO_AUTO_VIEW_HINT =
+  "> **DO NOT call `cgtrader_view_model` as a follow-up to this search.** The grid above is interactive — the user will click a card, and the UI will render the detail inline. Auto-invoking `cgtrader_view_model` leaves a stranded detail card below the grid when the user then clicks. If you want to summarize a specific model yourself in text, use `cgtrader_get_model` instead (it returns markdown, no card).";
+
 function buildSearchParams(p: SearchModelsInput): Record<string, unknown> {
   const apiParams: Record<string, unknown> = {
     page: p.page,
@@ -446,7 +454,7 @@ Example:
             has_more,
           },
         );
-        const hintParts: string[] = [];
+        const hintParts: string[] = [NO_AUTO_VIEW_HINT];
         if (userNotes) {
           hintParts.push(
             `> **User added a note:** ${userNotes}\n>\n> Take this into account; if the results don't match, ask the user to clarify.`,

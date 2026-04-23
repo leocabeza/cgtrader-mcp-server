@@ -1,8 +1,14 @@
 import { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { SupportedFormat } from "@cgtrader/cgt-viewer";
 import { clearChildren, makeChip, safeHttpUrl } from "../../shared/dom.ts";
 import { applyHostContext } from "../../shared/host-context.ts";
-import type { Model } from "../../shared/types.ts";
+import {
+  renderModelDetail,
+  type ModelDetailHandle,
+} from "../../shared/model-detail.ts";
+import { mountPreview } from "../../shared/preview.ts";
+import type { Model, ViewModelResult } from "../../shared/types.ts";
 import "./styles.css";
 
 type SearchResult = {
@@ -22,10 +28,14 @@ const pagerEl = document.getElementById("pager")!;
 const pageLabelEl = document.getElementById("page-label")!;
 const prevBtn = document.getElementById("prev-btn") as HTMLButtonElement;
 const nextBtn = document.getElementById("next-btn") as HTMLButtonElement;
+const backBtn = document.getElementById("back-btn") as HTMLButtonElement;
 const fullscreenBtn = document.getElementById(
   "fullscreen-btn",
 ) as HTMLButtonElement;
 const loaderEl = document.getElementById("loader") as HTMLElement;
+const detailContainerEl = document.getElementById(
+  "detail-container",
+) as HTMLElement;
 
 const loaderLabelEl = loaderEl.querySelector(".loader-label") as HTMLElement;
 const DEFAULT_LOADER_LABEL = loaderLabelEl.textContent ?? "Loading…";
@@ -33,6 +43,8 @@ const DEFAULT_LOADER_LABEL = loaderLabelEl.textContent ?? "Loading…";
 let lastArgs: Record<string, unknown> = {};
 let currentResult: SearchResult | null = null;
 let displayMode: "inline" | "fullscreen" | string = "inline";
+let detailHandle: ModelDetailHandle | null = null;
+let lastSummary = "";
 
 function setLoading(on: boolean, label?: string): void {
   root.classList.toggle("loading", on);
@@ -126,6 +138,7 @@ function render(result: SearchResult): void {
     models.length === 0
       ? "No results"
       : `${total.toLocaleString()} free models — page ${page}`;
+  lastSummary = summaryEl.textContent;
 
   clearChildren(gridEl);
   if (models.length === 0) {
@@ -166,26 +179,74 @@ async function gotoPage(page: number): Promise<void> {
   }
 }
 
+function showGrid(): void {
+  detailHandle?.destroy();
+  detailHandle = null;
+  clearChildren(detailContainerEl);
+  detailContainerEl.classList.remove("detail");
+  detailContainerEl.hidden = true;
+
+  gridEl.hidden = false;
+  pagerEl.hidden = !currentResult
+    ? true
+    : !(
+        (currentResult.page ?? 1) > 1 ||
+        currentResult.has_more === true ||
+        (currentResult.next_page ?? null) !== null
+      );
+  backBtn.hidden = true;
+  summaryEl.textContent = lastSummary;
+}
+
+function showDetail(): void {
+  gridEl.hidden = true;
+  pagerEl.hidden = true;
+  detailContainerEl.hidden = false;
+  backBtn.hidden = false;
+}
+
 async function openDetail(m: Model): Promise<void> {
   const title = m.title ?? `model ${m.id}`;
-  // Ask the host to run view_model as a first-class tool call so its widget
-  // renders (or re-renders) in the transcript. Rendering detail inline here
-  // would leave any prior view_model widget stranded below.
+  showDetail();
+  clearChildren(detailContainerEl);
+  detailContainerEl.classList.remove("detail");
+  setLoading(true, `Opening "${title}"…`);
+
   try {
-    const res = await app.sendMessage({
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `View model ${m.id} ("${title}").`,
-        },
-      ],
+    const res = await app.callServerTool({
+      name: "cgtrader_view_model",
+      arguments: { model_id: m.id },
     });
-    if (res.isError) {
-      console.error("sendMessage rejected by host");
+    const structured = res.structuredContent as ViewModelResult | undefined;
+    if (!structured?.model) {
+      summaryEl.textContent =
+        res.isError && res.content?.[0]?.type === "text"
+          ? (res.content[0] as { text: string }).text
+          : "Couldn't load model details.";
+      return;
     }
+    detailHandle = renderModelDetail(detailContainerEl, structured, {
+      callServerTool: (p) => app.callServerTool(p),
+      openLink: (p) => app.openLink(p),
+      mountPreview: async ({ container, data, onStatus }) => {
+        if (!data.picked) throw new Error("No preview candidate.");
+        const mounted = await mountPreview({
+          container,
+          url: data.picked.download_url,
+          format: data.picked.extension as SupportedFormat,
+          name: data.picked.name,
+          onStatus,
+        });
+        return () => mounted.dispose();
+      },
+    });
+    summaryEl.textContent = `Free model · id ${structured.model.id}`;
   } catch (e) {
-    console.error("sendMessage failed", e);
+    console.error("cgtrader_view_model failed", e);
+    summaryEl.textContent =
+      e instanceof Error ? e.message : "Couldn't load model details.";
+  } finally {
+    setLoading(false);
   }
 }
 
@@ -201,6 +262,7 @@ app.onhostcontextchanged = (ctx) => {
 };
 
 app.ontoolinput = (params) => {
+  showGrid();
   lastArgs = { ...(params.arguments as Record<string, unknown>) };
   summaryEl.textContent = "Searching CGTrader…";
   clearChildren(gridEl);
@@ -230,6 +292,7 @@ nextBtn.addEventListener("click", () => {
   const next = currentResult?.next_page ?? (currentResult?.page ?? 1) + 1;
   void gotoPage(next);
 });
+backBtn.addEventListener("click", () => showGrid());
 fullscreenBtn.addEventListener("click", async () => {
   const target = displayMode === "fullscreen" ? "inline" : "fullscreen";
   try {

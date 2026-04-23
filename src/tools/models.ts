@@ -548,7 +548,9 @@ function registerGetModel(server: McpServer, env: Env) {
     "cgtrader_get_model",
     {
       title: "Get free CGTrader model details",
-      description: `Fetch full details for a single CGTrader model.
+      description: `Fetch full details for a single CGTrader model as plain markdown.
+
+Use THIS tool (not cgtrader_view_model) whenever you want to inspect a model so you can summarize it to the user yourself — e.g. drilling into the top hit of a cgtrader_search_models result to write up polygon counts, file formats, and licensing. This tool returns markdown text; no interactive card is rendered in the chat, so it doesn't duplicate a grid the user is already looking at.
 
 Accepts either a numeric model_id or a CGTrader URL (product page or /items/{id}/download-page). Provide exactly one.
 
@@ -665,9 +667,21 @@ function registerViewModel(server: McpServer, env: Env) {
     {
       title: "View a free CGTrader model (UI)",
       _meta: { ui: { resourceUri: MODEL_DETAIL_UI_RESOURCE_URI } },
-      description: `Render the detail view for a single free CGTrader model.
+      description: `Render the interactive detail CARD for a single free CGTrader model (image gallery, metadata, download/preview CTAs).
 
-This tool is optimized for the Model Detail UI: it fetches the model and its preview images in one call and returns them together as structured content. Prefer cgtrader_get_model for plain-text/markdown summaries with follow-up elicitation.
+WHEN TO CALL:
+  - The user clicked a card in the cgtrader_search_models grid (the grid
+    invokes this tool itself via app.callServerTool — you don't need to).
+  - The user explicitly names a model, pastes a URL, or gives an id and
+    asks to "open", "view", or "see" it in the UI.
+
+WHEN NOT TO CALL:
+  - Do NOT call this to drill into your own top pick from a search result.
+    Use cgtrader_get_model instead — it returns plain markdown you can
+    paraphrase to the user, and does not spawn a redundant detail card
+    next to the grid the user is already looking at.
+  - Do NOT call this as a default follow-up to cgtrader_search_models.
+    The grid is interactive; let the user click.
 
 Accepts either a numeric model_id or a CGTrader URL (product page or /items/{id}/download-page). Provide exactly one.
 
